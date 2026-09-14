@@ -62,7 +62,7 @@ function getRingMaterial() {
     ctx.stroke();
 
     const texture = new THREE.CanvasTexture(canvas);
-    texture.encoding = THREE.sRGBEncoding;
+    texture.colorSpace = THREE.SRGBColorSpace;
     sharedRingMaterial = new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
@@ -93,7 +93,7 @@ function createTextSprite(text, { fontPx = 64 } = {}) {
   ctx.fillText(text, fontPx * 0.2, height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
-  texture.encoding = THREE.sRGBEncoding;
+  texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,

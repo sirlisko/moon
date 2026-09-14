@@ -17,7 +17,7 @@ export function getColorMap() {
       colorMapLoaded = true;
       colorMapListeners.splice(0).forEach((cb) => cb());
     });
-    colorMap.encoding = THREE.sRGBEncoding; // color data — gamma-correct
+    colorMap.colorSpace = THREE.SRGBColorSpace; // color data — gamma-correct
   }
   return colorMap;
 }

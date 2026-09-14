@@ -13,7 +13,7 @@ const canvas = document.querySelector("#bg");
 const renderer = new THREE.WebGLRenderer({ canvas });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const viewContainer = document.createElement("div");
 viewContainer.id = "view-overlay";
