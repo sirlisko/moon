@@ -8,6 +8,17 @@ const SPACING = 2.4;
 const CELL_RADIUS = 0.85;
 const LEFT_GUTTER = 3.2; // world units reserved for the row-label axis (month names or day numbers)
 const TOP_GUTTER = 1.4; // world units reserved for the column-header axis (day numbers or month names)
+// Calendar mode has no row labels (weeks aren't named) — just a small
+// symmetric margin either side of the 7-day-wide grid.
+const CAL_LEFT_GUTTER = 0.4;
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Calendar mode's per-cell day number sits smaller and in the corner, clear
+// of the sphere — a fraction of the header labels' normal world-space size.
+const CAL_DAY_NUMBER_SCALE = 0.5;
+const CAL_DAY_NUMBER_OFFSET = CELL_RADIUS * 0.95;
+// The Sun–Mon–… weekday header is a single row, not a whole column/row
+// label like month names — full label size reads oversized next to it.
+const CAL_WEEKDAY_SCALE = 0.55;
 const FRUSTUM_PADDING = 1.04;
 const BASE_ROTATION_Y = Math.PI * 1.54;
 const BASE_ROTATION_X = Math.PI * 0.02;
@@ -183,6 +194,10 @@ export interface MoonGridViewOptions {
   announce?: (text: string) => void;
   showRings?: boolean;
   getTopInset?: () => number;
+  // Lays the single month out as a traditional Sun–Sat week grid instead of
+  // one continuous day-of-month strip. Only meaningful for a single month
+  // (months.length === 1) — the year view always uses the strip layout.
+  calendarMode?: boolean;
 }
 
 // months: array of 0-based month indices — [m] for a single month, [0..11]
@@ -197,10 +212,29 @@ export function createMoonGridView({
   announce,
   showRings = false,
   getTopInset = () => 0,
+  calendarMode = false,
 }: MoonGridViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   camera.position.z = 10;
+
+  // Calendar mode replaces the day-of-month strip with a real Sun–Sat week
+  // grid, so it only makes sense for a single month.
+  const isCalendar = calendarMode && months.length === 1;
+  const leadDays = isCalendar ? localNoon(year, months[0]!, 1).getDay() : 0;
+  function calendarCol(day: number): number {
+    return (leadDays + day - 1) % 7;
+  }
+  function calendarWeekRow(day: number): number {
+    return Math.floor((leadDays + day - 1) / 7);
+  }
+  const calendarWeeks = isCalendar ? calendarWeekRow(daysInMonth(year, months[0]!)) + 1 : 0;
+  function calendarPosFor(day: number): { x: number; y: number } {
+    return {
+      x: CAL_LEFT_GUTTER + calendarCol(day) * SPACING + SPACING / 2,
+      y: -TOP_GUTTER - calendarWeekRow(day) * SPACING - SPACING / 2,
+    };
+  }
 
   const cols = 31; // days
   const rows = months.length; // months
@@ -208,14 +242,17 @@ export function createMoonGridView({
   const cells: Cell[] = [];
   const monthLabels: MonthLabelEntry[] = [];
   const dayLabels: DayLabelEntry[] = [];
+  const weekdayLabels: { sprite: THREE.Sprite; col: number }[] = [];
   const ringSprites: RingEntry[] = [];
   const disposables: Array<{ dispose(): void }> = [];
 
   months.forEach((month0, row) => {
-    const label = createTextSprite(MONTH_NAMES[month0]!, { fontPx: 56 });
-    scene.add(label);
-    monthLabels.push({ sprite: label, row });
-    disposables.push(label.material.map!, label.material);
+    if (!isCalendar) {
+      const label = createTextSprite(MONTH_NAMES[month0]!, { fontPx: 56 });
+      scene.add(label);
+      monthLabels.push({ sprite: label, row });
+      disposables.push(label.material.map!, label.material);
+    }
 
     const n = daysInMonth(year, month0);
     for (let day = 1; day <= n; day++) {
@@ -250,11 +287,30 @@ export function createMoonGridView({
     }
   });
 
-  for (let day = 1; day <= cols; day++) {
-    const label = createTextSprite(String(day), { fontPx: 40 });
-    scene.add(label);
-    dayLabels.push({ sprite: label, day });
-    disposables.push(label.material.map!, label.material);
+  if (isCalendar) {
+    WEEKDAY_NAMES.forEach((name, col) => {
+      const label = createTextSprite(name, { fontPx: 40 });
+      scene.add(label);
+      weekdayLabels.push({ sprite: label, col });
+      disposables.push(label.material.map!, label.material);
+    });
+    // One small day-number label per cell (rather than a header row, as in
+    // line mode) — reuses dayLabels/dayLabelByDay so the existing
+    // hover/focus highlight (setActiveCell) picks it up for free.
+    const n = daysInMonth(year, months[0]!);
+    for (let day = 1; day <= n; day++) {
+      const label = createTextSprite(String(day), { fontPx: 32 });
+      scene.add(label);
+      dayLabels.push({ sprite: label, day });
+      disposables.push(label.material.map!, label.material);
+    }
+  } else {
+    for (let day = 1; day <= cols; day++) {
+      const label = createTextSprite(String(day), { fontPx: 40 });
+      scene.add(label);
+      dayLabels.push({ sprite: label, day });
+      disposables.push(label.material.map!, label.material);
+    }
   }
 
   const cellMeshes = cells.map((c) => c.mesh);
@@ -322,7 +378,70 @@ export function createMoonGridView({
         };
   }
 
+  // Position of a cell for the currently active layout mode — used by both
+  // applyLayout and ensureVisible (keyboard auto-pan), which need the same
+  // day→world mapping regardless of which layout is active.
+  function cellPosFor(day: number, row: number): { x: number; y: number } {
+    return isCalendar ? calendarPosFor(day) : posFor(day - 1, row);
+  }
+
   function applyLayout() {
+    if (isCalendar) applyCalendarLayout();
+    else applyLineLayout();
+  }
+
+  function applyCalendarLayout() {
+    contentWidth = CAL_LEFT_GUTTER * 2 + 7 * SPACING;
+    contentHeight = TOP_GUTTER + calendarWeeks * SPACING;
+    centerX = contentWidth / 2;
+    centerY = -contentHeight / 2;
+
+    for (const { mesh, day, row } of cells) {
+      const { x, y } = calendarPosFor(day);
+      mesh.position.set(x, y, 0);
+      const isActive = activeCell !== null && activeCell.day === day && activeCell.row === row;
+      mesh.scale.setScalar(cellScale * (isActive ? CELL_ACTIVE_SCALE : 1));
+    }
+
+    for (const { sprite, day } of ringSprites) {
+      const { x, y } = calendarPosFor(day);
+      sprite.position.set(x, y, -0.05);
+      const s = CELL_RADIUS * 2 * RING_SCALE * cellScale;
+      sprite.scale.set(s, s, 1);
+    }
+
+    for (const { sprite, col } of weekdayLabels) {
+      // Kept within [-contentHeight, 0] (unlike the line-mode headers, which
+      // poke slightly above y=0) — resize()'s fit-margin math assumes
+      // content tops out at y=0, and calendar mode's near-square aspect
+      // ratio has much less spare letterboxing slack to hide that gap in
+      // than the very wide day-strip layouts do.
+      sprite.position.set(CAL_LEFT_GUTTER + col * SPACING + SPACING / 2, -TOP_GUTTER * 0.35, 0);
+      const base: SpriteScale = sprite.userData.baseScale;
+      sprite.userData.currentScale = {
+        x: base.x * cellScale * CAL_WEEKDAY_SCALE,
+        y: base.y * cellScale * CAL_WEEKDAY_SCALE,
+      } satisfies SpriteScale;
+      sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
+    }
+
+    // Day number in each cell's top-left corner — offset far enough from
+    // center to clear the sphere (radius CELL_RADIUS) without crowding the
+    // neighboring cell (half-spacing SPACING/2).
+    for (const { sprite, day } of dayLabels) {
+      const { x, y } = calendarPosFor(day);
+      const offset = CAL_DAY_NUMBER_OFFSET * cellScale;
+      sprite.position.set(x - offset, y + offset, 0.01);
+      const base: SpriteScale = sprite.userData.baseScale;
+      sprite.userData.currentScale = {
+        x: base.x * cellScale * CAL_DAY_NUMBER_SCALE,
+        y: base.y * cellScale * CAL_DAY_NUMBER_SCALE,
+      } satisfies SpriteScale;
+      sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
+    }
+  }
+
+  function applyLineLayout() {
     const primaryCount = cols;
     const secondaryCount = rows;
     contentWidth = LEFT_GUTTER + (transposed ? secondaryCount : primaryCount) * SPACING;
@@ -411,7 +530,7 @@ export function createMoonGridView({
   // current viewport — used when keyboard focus moves outside the pan window.
   function ensureVisible(cell: CellRef) {
     if (!panEnabled) return;
-    const { x, y } = posFor(cell.day - 1, cell.row);
+    const { x, y } = cellPosFor(cell.day, cell.row);
     const margin = SPACING * 0.6;
     let moved = false;
     if (x - margin < panX - frustumW / 2) {
@@ -520,13 +639,24 @@ export function createMoonGridView({
 
   function moveFocus(deltaCol: number, deltaRow: number) {
     const current = focusedCell || defaultFocusCell();
-    // deltaCol/deltaRow are screen-space (Right/Down = +1); translate
-    // through the current orientation so arrow keys match what's on screen.
-    let day = current.day + (transposed ? deltaRow : deltaCol);
-    let row = current.row + (transposed ? deltaCol : deltaRow);
-    row = Math.min(rows - 1, Math.max(0, row));
-    const maxDay = daysInMonth(year, months[row]!);
-    day = Math.min(maxDay, Math.max(1, day));
+    let day: number;
+    let row: number;
+    if (isCalendar) {
+      // The week grid is just the day-of-month axis wrapped every 7 — moving
+      // down a row is +7 days, so screen deltas translate straight to it.
+      row = current.row;
+      day = current.day + deltaCol + deltaRow * 7;
+      const maxDay = daysInMonth(year, months[row]!);
+      day = Math.min(maxDay, Math.max(1, day));
+    } else {
+      // deltaCol/deltaRow are screen-space (Right/Down = +1); translate
+      // through the current orientation so arrow keys match what's on screen.
+      day = current.day + (transposed ? deltaRow : deltaCol);
+      row = current.row + (transposed ? deltaCol : deltaRow);
+      row = Math.min(rows - 1, Math.max(0, row));
+      const maxDay = daysInMonth(year, months[row]!);
+      day = Math.min(maxDay, Math.max(1, day));
+    }
     focusedCell = { day, row };
     setActiveCell(focusedCell);
     ensureVisible(focusedCell);
@@ -597,19 +727,22 @@ export function createMoonGridView({
     },
 
     resize(width, height) {
-      const nextTransposed = height > width;
+      // Calendar mode is a fixed 7-column week grid — it never transposes;
+      // narrow screens fall back to the same min-cell-size + pan system as
+      // any other layout that doesn't fit at full size.
+      const nextTransposed = !isCalendar && height > width;
       if (nextTransposed !== transposed) {
         transposed = nextTransposed;
         panInitialized = false; // re-derive a sensible starting pan below
       }
       // The 1.3x close-pack boost only applies to the desktop single-row
-      // "wide strip" case — transposed/multi-row layouts rely on the
-      // min-cell-size + pan system below instead.
-      cellScale = rows === 1 && !transposed ? 1.3 : 1;
+      // "wide strip" case — transposed/multi-row/calendar layouts rely on
+      // the min-cell-size + pan system below instead.
+      cellScale = !isCalendar && rows === 1 && !transposed ? 1.3 : 1;
       applyLayout();
 
       const cellDiameterWorld = 2 * CELL_RADIUS * cellScale;
-      const { width: fitW, height: fitH } = fitFrustum(contentWidth, contentHeight, width / height);
+      let { width: fitW, height: fitH } = fitFrustum(contentWidth, contentHeight, width / height);
       const fitCellPx = (cellDiameterWorld / fitW) * width;
 
       if (fitCellPx >= MIN_CELL_PX) {
@@ -618,14 +751,30 @@ export function createMoonGridView({
         frustumH = fitH;
         pxPerWorldUnit = width / frustumW;
         topInsetWorld = getTopInset() / pxPerWorldUnit;
-        panX = centerX;
         // Fit mode already centers content with an even top/bottom margin
         // (frustumH - contentHeight, split both ways) — usually more than
         // enough to clear the nav on its own. Only nudge content down by
         // whatever's left over after that existing margin, rather than the
         // full inset, so desktop/wide screens (which already have plenty of
         // headroom) don't get an oversized, oddly-placed gap under the nav.
-        const existingTopMargin = (frustumH - contentHeight) / 2;
+        let existingTopMargin = (frustumH - contentHeight) / 2;
+        if (topInsetWorld > existingTopMargin) {
+          // Near-square content (e.g. the calendar grid) doesn't have wide
+          // layouts' huge incidental vertical letterboxing to hide the
+          // inset in — without this, nudging content down to clear the nav
+          // would push its bottom rows off the bottom of the frustum, with
+          // no pan available in fit mode to recover them. Pad the height
+          // fitFrustum aims for by the shortfall (doubled, since it splits
+          // the pad evenly top/bottom) so frustumH actually has the room.
+          const shortfall = topInsetWorld - existingTopMargin;
+          ({ width: fitW, height: fitH } = fitFrustum(contentWidth, contentHeight + shortfall * 2, width / height));
+          frustumW = fitW;
+          frustumH = fitH;
+          pxPerWorldUnit = width / frustumW;
+          topInsetWorld = getTopInset() / pxPerWorldUnit;
+          existingTopMargin = (frustumH - contentHeight) / 2;
+        }
+        panX = centerX;
         panY = centerY + Math.max(0, topInsetWorld - existingTopMargin);
       } else {
         panEnabled = true;

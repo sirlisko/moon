@@ -29,6 +29,17 @@ body {
   touch-action: none;
 }
 
+/* iOS Safari still honors its double-tap-to-zoom gesture on chrome UI even
+   with `user-scalable=no` in the viewport meta tag — that meta tag only
+   blocks pinch-zoom. `touch-action: manipulation` on the tappable chrome
+   (not #bg, which needs its own pan/pinch handling for OrbitControls and
+   grid drag-to-pan) tells the browser only panning/single-tap gestures are
+   meaningful here, which suppresses the double-tap zoom without disabling
+   anything else. */
+button {
+  touch-action: manipulation;
+}
+
 #view-overlay {
   position: fixed;
   inset: 0;
@@ -156,9 +167,8 @@ body {
   z-index: 10;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  row-gap: 4px;
   gap: 8px;
   max-width: calc(100vw - 24px);
   background: rgba(20, 20, 24, 0.55);
@@ -166,6 +176,7 @@ body {
   border-radius: 999px;
   padding: 6px;
   backdrop-filter: blur(8px);
+  touch-action: manipulation;
 }
 
 #app-nav button {
@@ -188,6 +199,7 @@ body {
 }
 
 #grid-nav {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -198,7 +210,7 @@ body {
 #grid-nav[hidden] {
   display: none;
 }
-#grid-nav button {
+#grid-nav button:not(#grid-label) {
   font-family: inherit;
   font-size: 15px;
   color: rgba(255, 255, 255, 0.65);
@@ -207,15 +219,153 @@ body {
   cursor: pointer;
   padding: 4px 8px;
 }
-#grid-nav button:hover {
+#grid-nav button:not(#grid-label):hover {
   color: #fff;
 }
 #grid-label {
+  font-family: inherit;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.8);
   min-width: 9ch;
   text-align: center;
   white-space: nowrap;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+#grid-label:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+/* Hints there's a picker behind the label without stealing its
+   accessible name / breaking exact-text assertions in tests. */
+#grid-label::after {
+  content: "▾";
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.6;
+}
+#date-picker {
+  position: fixed;
+  z-index: 30;
+  width: 264px;
+  background: rgba(20, 20, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+#date-picker[hidden] {
+  display: none;
+}
+.date-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.date-picker-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+.date-picker-nav {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-family: inherit;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.date-picker-nav:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+.date-picker-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 2px;
+}
+.date-picker-weekdays span {
+  font-size: 10px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.date-picker-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.date-picker-grid-month,
+.date-picker-grid-year {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.date-picker-cell {
+  font-family: inherit;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.date-picker-grid-day .date-picker-cell {
+  padding: 6px 0;
+}
+.date-picker-cell:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.date-picker-cell:focus-visible {
+  outline: 2px solid rgba(255, 176, 32, 0.6);
+  outline-offset: 1px;
+}
+.date-picker-cell-outside {
+  color: rgba(255, 255, 255, 0.25);
+}
+.date-picker-cell.is-today {
+  border-color: rgba(255, 176, 32, 0.5);
+}
+.date-picker-cell.is-selected {
+  background: rgba(255, 176, 32, 0.18);
+  border-color: rgba(255, 176, 32, 0.4);
+  color: #ffb020;
+}
+.date-picker-today {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.date-picker-today:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.date-picker-today[hidden] {
+  display: none;
 }
 
 /* top is set inline by layoutChromeButtons() in main.js when it would
@@ -227,6 +377,7 @@ body {
   z-index: 10;
   display: flex;
   gap: 8px;
+  touch-action: manipulation;
 }
 
 .icon-button {
@@ -256,6 +407,17 @@ body {
   background: rgba(255, 176, 32, 0.18);
   border-color: rgba(255, 176, 32, 0.4);
   color: #ffb020;
+}
+
+/* The new/full moon marker toggle gets its own, quieter "on" look — a pale
+   moonlight glow rather than the amber used for other active toggles,
+   since amber reads as a generic app accent and this one should evoke the
+   full moon itself. */
+#rings-button.active {
+  background: radial-gradient(circle, rgba(255, 250, 227, 0.4), rgba(255, 250, 227, 0.12));
+  border-color: rgba(255, 250, 227, 0.6);
+  color: #fffaf0;
+  box-shadow: 0 0 8px rgba(255, 247, 214, 0.4);
 }
 
 #about-overlay {
@@ -343,14 +505,8 @@ body {
     font-size: 12px;
   }
   #grid-nav {
-    flex-basis: 100%;
-    justify-content: center;
-    margin-left: 0;
-    padding-left: 0;
-    padding-top: 5px;
-    margin-top: 3px;
-    border-left: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    margin-left: 4px;
+    padding-left: 8px;
   }
   #grid-label {
     font-size: 12px;
@@ -391,10 +547,10 @@ body {
   }
 }
 
-/* The 480px breakpoint's sizing is marginal on genuinely small phones (an
-   iPhone SE-class 320px-wide screen) — "Today"/"Month"/"Year" can overflow
-   by just a few px and tear "Year" onto its own orphaned line. Shrink
-   further rather than let that happen. */
+/* Extra shrink room for genuinely small phones — the nav stays a single
+   row at every width (see #app-nav's flex-wrap: nowrap above), so this
+   just keeps it comfortably clear of the viewport edges rather than
+   letting anything clip. */
 @media (max-width: 370px) {
   #app-nav {
     gap: 2px;
@@ -404,9 +560,18 @@ body {
     padding: 5px 8px;
     font-size: 11px;
   }
+  #grid-nav {
+    gap: 2px;
+    margin-left: 2px;
+    padding-left: 6px;
+  }
+  #grid-nav button:not(#grid-label) {
+    padding: 4px 4px;
+  }
   #grid-label {
     font-size: 11px;
     min-width: 0;
+    padding: 4px 4px;
   }
   .moon-label {
     font-size: 11px;

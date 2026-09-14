@@ -8,6 +8,7 @@ import { getColorMap, onColorMapReady } from "./textures.js";
 import { createLocationState } from "./location.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
+import { createDatePicker } from "./date-picker.js";
 import type { AppState, AppView, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
@@ -73,7 +74,7 @@ nav.innerHTML = `
   <button data-view="year">Year</button>
   <span id="grid-nav" hidden>
     <button id="grid-prev" aria-label="Previous">‹</button>
-    <span id="grid-label"></span>
+    <button id="grid-label" type="button" title="Jump to a date"></button>
     <button id="grid-next" aria-label="Next">›</button>
   </span>
 `;
@@ -81,9 +82,47 @@ document.body.appendChild(nav);
 
 const navButtons = nav.querySelectorAll<HTMLButtonElement>("button[data-view]");
 const gridNav = nav.querySelector<HTMLElement>("#grid-nav")!;
-const gridLabel = nav.querySelector<HTMLElement>("#grid-label")!;
+const gridLabel = nav.querySelector<HTMLButtonElement>("#grid-label")!;
 const gridPrev = nav.querySelector<HTMLButtonElement>("#grid-prev")!;
 const gridNext = nav.querySelector<HTMLButtonElement>("#grid-next")!;
+const datePicker = createDatePicker();
+
+gridLabel.addEventListener("click", () => {
+  if (state.view === "month") {
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "month",
+      year: state.year,
+      month: state.month,
+      onSelect: ({ year, month }) => {
+        state.year = year;
+        state.month = month;
+        setView("month");
+      },
+    });
+  } else if (state.view === "year") {
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "year",
+      year: state.year,
+      month: 0,
+      onSelect: ({ year }) => {
+        state.year = year;
+        setView("year");
+      },
+    });
+  } else {
+    const current = state.view === "detail" ? state.detailDate! : new Date();
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "day",
+      year: current.getFullYear(),
+      month: current.getMonth(),
+      day: current.getDate(),
+      onSelect: ({ year, month, day }) => goToDetail(new Date(year, month, day!)),
+    });
+  }
+});
 
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -132,6 +171,10 @@ const chrome = createChromeButtons({
   nav,
   announce,
   onToggleRings: (visible) => activeView?.setRingsVisible?.(visible),
+  // Calendar/line is a structural layout change (not a live toggle like
+  // rings), and only ever visible while month view is active — safe to
+  // just rebuild the current view.
+  onToggleCalendarMode: () => setView(state.view),
 });
 
 function setView(kind: AppView) {
@@ -146,10 +189,14 @@ function setView(kind: AppView) {
   // The rings toggle only means anything on the grid — showing it on
   // Today/detail (where there's nothing to toggle) is just confusing.
   chrome.ringsButton.hidden = kind !== "month" && kind !== "year";
+  // Calendar/line only means anything for a single month — year view
+  // always uses the strip layout regardless of the stored preference.
+  chrome.calendarModeButton.hidden = kind !== "month";
 
   if (kind === "today") {
     gridNav.hidden = false;
-    gridLabel.textContent = NAV_DATE_FORMAT.format(new Date());
+    const today = new Date();
+    gridLabel.textContent = NAV_DATE_FORMAT.format(today);
     document.title = `Today, ${gridLabel.textContent} · Moon`;
     activeView = createMoonDetailView({
       date: null,
@@ -158,6 +205,7 @@ function setView(kind: AppView) {
       onBack: null,
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
+      getTopInset: chrome.getTopInset,
     });
   } else if (kind === "month" || kind === "year") {
     gridNav.hidden = false;
@@ -172,6 +220,7 @@ function setView(kind: AppView) {
       announce,
       showRings: chrome.getShowRings(),
       getTopInset: chrome.getTopInset,
+      calendarMode: kind === "month" && chrome.getCalendarMode(),
     });
   } else if (kind === "detail") {
     gridNav.hidden = false;
@@ -184,6 +233,7 @@ function setView(kind: AppView) {
       onBack: () => setView(state.returnTo!.view),
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
+      getTopInset: chrome.getTopInset,
     });
   }
 

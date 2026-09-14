@@ -54,6 +54,13 @@ export interface MoonDetailViewOptions {
   onBack: (() => void) | null;
   onRequestLocation?: () => void;
   announce?: (text: string) => void;
+  // Live pixel measurement (from chrome-buttons.js) of the safe top offset
+  // below the nav pill and icon cluster — both back-button and reset-button
+  // sit top-right/top-left and were previously pinned to a fixed CSS `top`
+  // that assumed the icon cluster never moves, so a narrow screen wide
+  // enough to push the icon cluster below the nav (see chrome-buttons.js's
+  // own layoutChromeButtons) made "Reset view" collide with it.
+  getTopInset?: () => number;
 }
 
 // The single "moon as seen from here" 3D view. `live: true` (the "Today" nav
@@ -73,6 +80,7 @@ export function createMoonDetailView({
   onBack,
   onRequestLocation,
   announce,
+  getTopInset,
 }: MoonDetailViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 0.1, 1000);
@@ -129,6 +137,16 @@ export function createMoonDetailView({
   let backButton: HTMLButtonElement | null = null;
   let resetButton: HTMLButtonElement | null = null;
   let locationButton: HTMLButtonElement | null = null;
+
+  // Keeps back/reset from colliding with the icon cluster when it's been
+  // pushed below the nav (see the comment on getTopInset above) — a no-op
+  // when getTopInset isn't supplied, leaving the CSS default `top`.
+  function applyChromeInset() {
+    if (!getTopInset) return;
+    const top = `${getTopInset()}px`;
+    if (backButton) backButton.style.top = top;
+    if (resetButton) resetButton.style.top = top;
+  }
 
   function applyMoonState(state: MoonState) {
     moonState = state;
@@ -217,6 +235,7 @@ export function createMoonDetailView({
         controls!.update();
       });
       root.appendChild(resetButton);
+      applyChromeInset();
 
       controls = new OrbitControls(camera, renderer.domElement);
       controls.enablePan = false;
@@ -253,6 +272,7 @@ export function createMoonDetailView({
       camera.aspect = width / height;
       camera.fov = computeFov(camera.aspect);
       camera.updateProjectionMatrix();
+      applyChromeInset();
     },
 
     // Called by main.js when geolocation resolves after this view already
