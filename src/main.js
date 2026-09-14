@@ -149,6 +149,7 @@ function setView(kind) {
   if (kind === "today") {
     gridNav.hidden = false;
     gridLabel.textContent = NAV_DATE_FORMAT.format(new Date());
+    document.title = `Today, ${gridLabel.textContent} · Moon`;
     activeView = createMoonDetailView({
       date: null,
       location,
@@ -161,6 +162,7 @@ function setView(kind) {
     gridNav.hidden = false;
     gridLabel.textContent =
       kind === "month" ? `${MONTH_NAMES[state.month]} ${state.year}` : `${state.year}`;
+    document.title = `${gridLabel.textContent} · Moon`;
     const months = kind === "month" ? [state.month] : [...Array(12).keys()];
     activeView = createMoonGridView({
       year: state.year,
@@ -173,6 +175,7 @@ function setView(kind) {
   } else if (kind === "detail") {
     gridNav.hidden = false;
     gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate);
+    document.title = `${gridLabel.textContent} · Moon`;
     activeView = createMoonDetailView({
       date: state.detailDate,
       location,
