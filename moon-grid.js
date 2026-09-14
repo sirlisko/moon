@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { computeMoonVisual, daysInMonth, localNoon, MONTH_NAMES } from "./astronomy.js";
+import { computeMoonVisual, daysInMonth, localNoon, getPhaseName, MONTH_NAMES } from "./astronomy.js";
 import { getColorMap } from "./textures.js";
 import { createMoonCellMaterial } from "./moon-shader.js";
 
@@ -27,6 +27,12 @@ const LABEL_HOVER_OPACITY = 1;
 const LABEL_HOVER_SCALE = 1.2;
 const LABEL_COLOR = new THREE.Color(0xffffff);
 const LABEL_HOVER_COLOR = new THREE.Color(0xffb020);
+// How much bigger the active (hovered or keyboard-focused) cell renders.
+const CELL_ACTIVE_SCALE = 1.15;
+// New/full moon ring halo, relative to the cell's own diameter.
+const RING_SCALE = 1.35;
+
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
 
 // Shared across every grid mount — a year view and a month view both reuse
 // the same low-poly sphere; never disposed, only per-cell materials are.
@@ -36,6 +42,36 @@ function getCellGeometry() {
     sharedCellGeometry = new THREE.SphereGeometry(CELL_RADIUS, 20, 14);
   }
   return sharedCellGeometry;
+}
+
+// A thin ring texture marking new/full moon days — one shared material for
+// every marked cell across every grid mount, never disposed.
+let sharedRingMaterial = null;
+function getRingMaterial() {
+  if (!sharedRingMaterial) {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    const lineWidth = size * 0.07;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - lineWidth, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding;
+    sharedRingMaterial = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      opacity: 0.6,
+      color: 0xffffff,
+    });
+  }
+  return sharedRingMaterial;
 }
 
 // Rasterizes text once at a fixed resolution, solid white — dimming and
@@ -95,12 +131,21 @@ function fitFrustum(contentWidth, contentHeight, containerAspect) {
   return { width: width * FRUSTUM_PADDING, height: height * FRUSTUM_PADDING };
 }
 
+// Distance from a 0..1 phase fraction to the nearest new moon (0 or 1) / full
+// moon (0.5) — used to find each lunar cycle's single closest calendar day.
+function distToNew(phase) {
+  return Math.min(phase, 1 - phase);
+}
+function distToFull(phase) {
+  return Math.abs(phase - 0.5);
+}
+
 // months: array of 0-based month indices — [m] for a single month, [0..11]
 // for a full year. Same grid builder either way; year view is just "more
 // months." On a portrait/narrow viewport the grid transposes — days run
 // vertically and months become columns — since scrolling vertically is the
 // natural mobile gesture, vs. the horizontal "poster" layout on desktop.
-export function createMoonGridView({ year, months, onSelectDate }) {
+export function createMoonGridView({ year, months, onSelectDate, announce }) {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   camera.position.z = 10;
@@ -111,6 +156,7 @@ export function createMoonGridView({ year, months, onSelectDate }) {
   const cells = []; // { mesh, day, row }
   const monthLabels = []; // { sprite, row }
   const dayLabels = []; // { sprite, day }
+  const ringSprites = []; // { sprite, day, row }
   const disposables = [];
 
   months.forEach((month0, row) => {
@@ -122,17 +168,32 @@ export function createMoonGridView({ year, months, onSelectDate }) {
     const n = daysInMonth(year, month0);
     for (let day = 1; day <= n; day++) {
       const date = localNoon(year, month0, day);
-      const { phase } = computeMoonVisual(date);
-      const material = createMoonCellMaterial(getColorMap(), phase);
+      const visual = computeMoonVisual(date);
+      const prevPhase = computeMoonVisual(localNoon(year, month0, day - 1)).phase;
+      const nextPhase = computeMoonVisual(localNoon(year, month0, day + 1)).phase;
+      const isNewMoon = distToNew(visual.phase) < distToNew(prevPhase) && distToNew(visual.phase) < distToNew(nextPhase);
+      const isFullMoon = distToFull(visual.phase) < distToFull(prevPhase) && distToFull(visual.phase) < distToFull(nextPhase);
+
+      const material = createMoonCellMaterial(getColorMap(), visual.phase);
       const mesh = new THREE.Mesh(getCellGeometry(), material);
       mesh.rotation.x = BASE_ROTATION_X;
       mesh.rotation.y = BASE_ROTATION_Y;
       mesh.userData.date = date;
       mesh.userData.day = day;
       mesh.userData.row = row;
+      mesh.userData.phaseName = getPhaseName(visual.phase);
+      mesh.userData.illuminatedPercent = visual.illuminatedPercent;
+      mesh.userData.isNewMoon = isNewMoon;
+      mesh.userData.isFullMoon = isFullMoon;
       scene.add(mesh);
       cells.push({ mesh, day, row });
       disposables.push(material);
+
+      if (isNewMoon || isFullMoon) {
+        const ring = new THREE.Sprite(getRingMaterial());
+        scene.add(ring);
+        ringSprites.push({ sprite: ring, day, row });
+      }
     }
   });
 
@@ -144,28 +205,36 @@ export function createMoonGridView({ year, months, onSelectDate }) {
   }
 
   const cellMeshes = cells.map((c) => c.mesh);
+  const cellMeshByKey = new Map(cells.map((c) => [cellKey(c), c.mesh]));
   const monthLabelByRow = new Map(monthLabels.map((m) => [m.row, m.sprite]));
   const dayLabelByDay = new Map(dayLabels.map((d) => [d.day, d.sprite]));
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let canvas = null;
 
-  // Hover crosshair — highlights the month/day labels for whichever cell
-  // the pointer is currently over. Mouse-only in practice: touch doesn't
-  // fire pointermove without an active (dragging) pointer.
-  let hoveredCell = null; // { day, row } | null
-  function setHover(cell) {
-    const changed = !cell !== !hoveredCell || (cell && hoveredCell && (cell.day !== hoveredCell.day || cell.row !== hoveredCell.row));
-    if (!changed) return;
-    if (hoveredCell) {
-      setLabelHighlighted(monthLabelByRow.get(hoveredCell.row), false);
-      setLabelHighlighted(dayLabelByDay.get(hoveredCell.day), false);
+  function cellKey(c) {
+    return c ? `${c.day}-${c.row}` : null;
+  }
+
+  // The single "active cell" concept driving the visual crosshair — set by
+  // mouse hover OR keyboard focus, whichever last moved. Highlights the
+  // month/day labels (setLabelHighlighted) and scales the cell mesh itself,
+  // so sighted keyboard users can see where they are too, not just via
+  // screen-reader announcements.
+  let activeCell = null;
+  function setActiveCell(cell) {
+    if (cellKey(cell) === cellKey(activeCell)) return;
+    if (activeCell) {
+      setLabelHighlighted(monthLabelByRow.get(activeCell.row), false);
+      setLabelHighlighted(dayLabelByDay.get(activeCell.day), false);
+      cellMeshByKey.get(cellKey(activeCell))?.scale.setScalar(cellScale);
     }
     if (cell) {
       setLabelHighlighted(monthLabelByRow.get(cell.row), true);
       setLabelHighlighted(dayLabelByDay.get(cell.day), true);
+      cellMeshByKey.get(cellKey(cell))?.scale.setScalar(cellScale * CELL_ACTIVE_SCALE);
     }
-    hoveredCell = cell;
+    activeCell = cell;
     if (canvas) canvas.style.cursor = cell ? "pointer" : "";
   }
 
@@ -175,7 +244,7 @@ export function createMoonGridView({ year, months, onSelectDate }) {
     pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
     const hit = raycaster.intersectObjects(cellMeshes, false)[0];
-    setHover(hit ? { day: hit.object.userData.day, row: hit.object.userData.row } : null);
+    setActiveCell(hit ? { day: hit.object.userData.day, row: hit.object.userData.row } : null);
   }
 
   // Layout state, recomputed in resize() since orientation is only known then.
@@ -186,9 +255,21 @@ export function createMoonGridView({ year, months, onSelectDate }) {
   let centerX = 0;
   let centerY = 0;
 
+  // "Primary" axis = days (31, the long axis) — X when horizontal, Y when
+  // transposed. "Secondary" axis = months (1 or 12) — the other one.
+  function posFor(primaryIndex, secondaryIndex) {
+    return transposed
+      ? {
+          x: LEFT_GUTTER + secondaryIndex * SPACING + SPACING / 2,
+          y: -TOP_GUTTER - primaryIndex * SPACING - SPACING / 2,
+        }
+      : {
+          x: LEFT_GUTTER + primaryIndex * SPACING + SPACING / 2,
+          y: -TOP_GUTTER - secondaryIndex * SPACING - SPACING / 2,
+        };
+  }
+
   function applyLayout() {
-    // "Primary" axis = days (31, the long axis) — X when horizontal,
-    // Y when transposed. "Secondary" axis = months (1 or 12) — the other one.
     const primaryCount = cols;
     const secondaryCount = rows;
     contentWidth = LEFT_GUTTER + (transposed ? secondaryCount : primaryCount) * SPACING;
@@ -196,22 +277,18 @@ export function createMoonGridView({ year, months, onSelectDate }) {
     centerX = contentWidth / 2;
     centerY = -contentHeight / 2;
 
-    function posFor(primaryIndex, secondaryIndex) {
-      return transposed
-        ? {
-            x: LEFT_GUTTER + secondaryIndex * SPACING + SPACING / 2,
-            y: -TOP_GUTTER - primaryIndex * SPACING - SPACING / 2,
-          }
-        : {
-            x: LEFT_GUTTER + primaryIndex * SPACING + SPACING / 2,
-            y: -TOP_GUTTER - secondaryIndex * SPACING - SPACING / 2,
-          };
-    }
-
     for (const { mesh, day, row } of cells) {
       const { x, y } = posFor(day - 1, row);
       mesh.position.set(x, y, 0);
-      mesh.scale.setScalar(cellScale);
+      const isActive = activeCell && activeCell.day === day && activeCell.row === row;
+      mesh.scale.setScalar(cellScale * (isActive ? CELL_ACTIVE_SCALE : 1));
+    }
+
+    for (const { sprite, day, row } of ringSprites) {
+      const { x, y } = posFor(day - 1, row);
+      sprite.position.set(x, y, -0.05);
+      const s = CELL_RADIUS * 2 * RING_SCALE * cellScale;
+      sprite.scale.set(s, s, 1);
     }
 
     // Month labels sit in the secondary-axis gutter: a left-hand row label
@@ -269,6 +346,33 @@ export function createMoonGridView({ year, months, onSelectDate }) {
     camera.updateProjectionMatrix();
   }
 
+  // Pans just enough to bring a cell (plus a small margin) back within the
+  // current viewport — used when keyboard focus moves outside the pan window.
+  function ensureVisible(cell) {
+    if (!panEnabled) return;
+    const { x, y } = posFor(cell.day - 1, cell.row);
+    const margin = SPACING * 0.6;
+    let moved = false;
+    if (x - margin < panX - frustumW / 2) {
+      panX = x - margin + frustumW / 2;
+      moved = true;
+    } else if (x + margin > panX + frustumW / 2) {
+      panX = x + margin - frustumW / 2;
+      moved = true;
+    }
+    if (y + margin > panY + frustumH / 2) {
+      panY = y + margin - frustumH / 2;
+      moved = true;
+    } else if (y - margin < panY - frustumH / 2) {
+      panY = y - margin + frustumH / 2;
+      moved = true;
+    }
+    if (moved) {
+      clampPan();
+      applyCamera();
+    }
+  }
+
   function selectAt(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -324,7 +428,88 @@ export function createMoonGridView({ year, months, onSelectDate }) {
   }
 
   function handlePointerLeave() {
-    setHover(null);
+    setActiveCell(null);
+  }
+
+  // Keyboard navigation — the canvas is a plain <canvas>, invisible to
+  // screen readers and unreachable by Tab without an explicit tabIndex/role,
+  // so arrow-key focus movement + an aria-live announcement (via `announce`,
+  // owned by main.js) stand in for what would otherwise be a focusable grid
+  // of real elements.
+  let focusedCell = null;
+
+  function defaultFocusCell() {
+    const now = new Date();
+    if (year === now.getFullYear()) {
+      const row = months.indexOf(now.getMonth());
+      if (row !== -1) return { day: now.getDate(), row };
+    }
+    return { day: 1, row: 0 };
+  }
+
+  function announceFocused() {
+    if (!focusedCell) return;
+    const mesh = cellMeshByKey.get(cellKey(focusedCell));
+    if (!mesh) return;
+    let text = `${DATE_FORMAT.format(mesh.userData.date)}. ${mesh.userData.phaseName}. ${mesh.userData.illuminatedPercent}% illuminated.`;
+    if (mesh.userData.isNewMoon) text += " New moon.";
+    if (mesh.userData.isFullMoon) text += " Full moon.";
+    announce?.(text);
+  }
+
+  function moveFocus(deltaCol, deltaRow) {
+    const current = focusedCell || defaultFocusCell();
+    // deltaCol/deltaRow are screen-space (Right/Down = +1); translate
+    // through the current orientation so arrow keys match what's on screen.
+    let day = current.day + (transposed ? deltaRow : deltaCol);
+    let row = current.row + (transposed ? deltaCol : deltaRow);
+    row = Math.min(rows - 1, Math.max(0, row));
+    const maxDay = daysInMonth(year, months[row]);
+    day = Math.min(maxDay, Math.max(1, day));
+    focusedCell = { day, row };
+    setActiveCell(focusedCell);
+    ensureVisible(focusedCell);
+    announceFocused();
+  }
+
+  function handleKeyDown(event) {
+    switch (event.key) {
+      case "ArrowLeft":
+        moveFocus(-1, 0);
+        event.preventDefault();
+        break;
+      case "ArrowRight":
+        moveFocus(1, 0);
+        event.preventDefault();
+        break;
+      case "ArrowUp":
+        moveFocus(0, -1);
+        event.preventDefault();
+        break;
+      case "ArrowDown":
+        moveFocus(0, 1);
+        event.preventDefault();
+        break;
+      case "Enter":
+      case " ": {
+        const mesh = focusedCell && cellMeshByKey.get(cellKey(focusedCell));
+        if (mesh) onSelectDate(mesh.userData.date);
+        event.preventDefault();
+        break;
+      }
+    }
+  }
+
+  function handleFocus() {
+    if (!focusedCell) focusedCell = defaultFocusCell();
+    setActiveCell(focusedCell);
+    announceFocused();
+  }
+
+  function handleBlur() {
+    // Keep focusedCell remembered so tabbing back returns to the same spot;
+    // just stop showing it as active (unless the mouse is now hovering it).
+    setActiveCell(null);
   }
 
   return {
@@ -334,6 +519,12 @@ export function createMoonGridView({ year, months, onSelectDate }) {
       canvas.addEventListener("pointermove", handlePointerMove);
       canvas.addEventListener("pointerup", handlePointerUp);
       canvas.addEventListener("pointerleave", handlePointerLeave);
+      canvas.addEventListener("keydown", handleKeyDown);
+      canvas.addEventListener("focus", handleFocus);
+      canvas.addEventListener("blur", handleBlur);
+      canvas.tabIndex = 0;
+      canvas.setAttribute("role", "application");
+      canvas.setAttribute("aria-label", "Moon phase calendar. Use arrow keys to move, Enter to open a day.");
     },
 
     update() {
@@ -391,7 +582,13 @@ export function createMoonGridView({ year, months, onSelectDate }) {
         canvas.removeEventListener("pointermove", handlePointerMove);
         canvas.removeEventListener("pointerup", handlePointerUp);
         canvas.removeEventListener("pointerleave", handlePointerLeave);
+        canvas.removeEventListener("keydown", handleKeyDown);
+        canvas.removeEventListener("focus", handleFocus);
+        canvas.removeEventListener("blur", handleBlur);
         canvas.style.cursor = "";
+        canvas.removeAttribute("tabindex");
+        canvas.removeAttribute("role");
+        canvas.removeAttribute("aria-label");
       }
       disposables.forEach((d) => d.dispose());
       cells.length = 0;

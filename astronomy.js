@@ -7,6 +7,7 @@ import {
   Equator,
   Horizon,
   SiderealTime,
+  SearchRiseSet,
 } from "astronomy-engine";
 
 export function getPhaseName(phase) {
@@ -58,21 +59,43 @@ export function computeMoonVisual(date) {
   };
 }
 
-// Adds observer-dependent data (horizon position + parallactic angle) on top
-// of computeMoonVisual — only needed for the single-moon detail view.
+function localMidnight(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+}
+
+// Moonrise/moonset within date's calendar day (local time) — either can be
+// null: moonrise drifts ~50 minutes later each day, so some calendar days
+// have no rise (or no set) event at all. Searches a 1-day window from local
+// midnight, not the whole synodic month, so this stays cheap.
+function computeRiseSet(date, observer) {
+  const start = localMidnight(date);
+  const riseTime = SearchRiseSet(Body.Moon, observer, +1, start, 1);
+  const setTime = SearchRiseSet(Body.Moon, observer, -1, start, 1);
+  return {
+    moonrise: riseTime ? riseTime.date : null,
+    moonset: setTime ? setTime.date : null,
+  };
+}
+
+// Adds observer-dependent data (horizon position, parallactic angle,
+// rise/set times) on top of computeMoonVisual — only needed for the
+// single-moon detail view.
 export function computeMoonState(date, observerCoords) {
   const visual = computeMoonVisual(date);
 
   let parallacticAngle = 0;
   let horizon = null;
+  let moonrise = null;
+  let moonset = null;
   if (observerCoords) {
     const observer = new Observer(observerCoords.lat, observerCoords.lon, 0);
     const eq = Equator(Body.Moon, date, observer, true, true);
     horizon = Horizon(date, observer, eq.ra, eq.dec, "normal");
     parallacticAngle = computeParallacticAngle(date, observer, eq.ra, eq.dec);
+    ({ moonrise, moonset } = computeRiseSet(date, observer));
   }
 
-  return { ...visual, parallacticAngle, horizon };
+  return { ...visual, parallacticAngle, horizon, moonrise, moonset };
 }
 
 export function daysInMonth(year, month0) {

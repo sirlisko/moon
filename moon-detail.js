@@ -15,6 +15,7 @@ const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "long",
   day: "numeric",
 });
+const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
 // The single "moon as seen from here" 3D view. `live: true` (the "Today" nav
 // entry) recomputes from the real clock every 30s; otherwise it's a static
@@ -26,7 +27,7 @@ const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
 // main.js) is only called when the user clicks the "Use my location" button,
 // and views read location.coords/status fresh on every refresh() call, so
 // a later grant still takes effect via refreshLocation().
-export function createMoonDetailView({ date, location, live, onBack, onRequestLocation }) {
+export function createMoonDetailView({ date, location, live, onBack, onRequestLocation, announce }) {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
   camera.position.copy(DEFAULT_CAMERA_POSITION);
@@ -93,7 +94,8 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
     const at = live ? new Date() : date;
     applyMoonState(computeMoonState(at, location.coords));
 
-    const lines = [`${getPhaseName(moonState.phase)} · ${moonState.illuminatedPercent}% illuminated`];
+    const phaseLine = `${getPhaseName(moonState.phase)} · ${moonState.illuminatedPercent}% illuminated`;
+    const lines = [phaseLine];
     if (moonState.horizon) {
       const alt = moonState.horizon.altitude;
       const when = live ? "right now" : "at local noon";
@@ -102,6 +104,11 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
           ? `${alt.toFixed(0)}° above the ${azimuthToCompass(moonState.horizon.azimuth)} horizon ${when}`
           : `below the horizon ${when}`
       );
+      if (moonState.moonrise || moonState.moonset) {
+        const rise = moonState.moonrise ? `Moonrise ${TIME_FORMAT.format(moonState.moonrise)}` : "No moonrise today";
+        const set = moonState.moonset ? `Moonset ${TIME_FORMAT.format(moonState.moonset)}` : "No moonset today";
+        lines.push(`${rise} · ${set}`);
+      }
     } else if (location.status === "denied") {
       lines.push("Location unavailable — showing geocentric view");
     } else if (location.status === "unsupported") {
@@ -109,6 +116,10 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
     }
     if (!live) lines.push(DATE_FORMAT.format(date));
     if (label) label.innerHTML = lines.join("<br>");
+
+    // Live re-refreshes every 30s — only announce on an actual date change
+    // (static views) or a fresh location grant, not every routine tick.
+    if (!live) announce?.(`${DATE_FORMAT.format(date)}. ${phaseLine}.`);
 
     if (locationButton) {
       const needsButton = !moonState.horizon && (location.status === "idle" || location.status === "pending");
