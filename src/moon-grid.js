@@ -27,10 +27,10 @@ const LABEL_HOVER_OPACITY = 1;
 const LABEL_HOVER_SCALE = 1.2;
 const LABEL_COLOR = new THREE.Color(0xffffff);
 const LABEL_HOVER_COLOR = new THREE.Color(0xffb020);
-// How much bigger the active (hovered or keyboard-focused) cell renders.
 const CELL_ACTIVE_SCALE = 1.15;
-// New/full moon ring halo, relative to the cell's own diameter.
-const RING_SCALE = 1.35;
+// New/full moon ring halo, relative to the cell's own diameter. Kept small
+// and faint — a quiet hint, not a badge competing with the moon itself.
+const RING_SCALE = 1.22;
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
 
@@ -54,7 +54,7 @@ function getRingMaterial() {
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d");
-    const lineWidth = size * 0.07;
+    const lineWidth = size * 0.035;
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
@@ -67,7 +67,7 @@ function getRingMaterial() {
       map: texture,
       transparent: true,
       depthTest: false,
-      opacity: 0.6,
+      opacity: 0.32,
       color: 0xffffff,
     });
   }
@@ -145,7 +145,7 @@ function distToFull(phase) {
 // months." On a portrait/narrow viewport the grid transposes — days run
 // vertically and months become columns — since scrolling vertically is the
 // natural mobile gesture, vs. the horizontal "poster" layout on desktop.
-export function createMoonGridView({ year, months, onSelectDate, announce }) {
+export function createMoonGridView({ year, months, onSelectDate, announce, showRings = false, getTopInset = () => 0 }) {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   camera.position.z = 10;
@@ -191,6 +191,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce }) {
 
       if (isNewMoon || isFullMoon) {
         const ring = new THREE.Sprite(getRingMaterial());
+        ring.visible = showRings;
         scene.add(ring);
         ringSprites.push({ sprite: ring, day, row });
       }
@@ -323,11 +324,17 @@ export function createMoonGridView({ year, months, onSelectDate, announce }) {
   let frustumH = 1;
   let panX = 0;
   let panY = 0;
+  // How much world space, at the current zoom, corresponds to the fixed
+  // nav/icon cluster floating over the canvas — recomputed every resize()
+  // from getTopInset() (a live pixel measurement owned by main.js). Baked
+  // into panBounds()'s maxY so panning can never scroll content underneath
+  // that overlay, on any screen size or zoom level.
+  let topInsetWorld = 0;
 
   function panBounds() {
     const minX = frustumW >= contentWidth ? centerX : frustumW / 2;
     const maxX = frustumW >= contentWidth ? centerX : contentWidth - frustumW / 2;
-    const maxY = frustumH >= contentHeight ? centerY : -frustumH / 2;
+    const maxY = frustumH >= contentHeight ? centerY : -frustumH / 2 + topInsetWorld;
     const minY = frustumH >= contentHeight ? centerY : -contentHeight + frustumH / 2;
     return { minX, maxX, minY, maxY };
   }
@@ -555,13 +562,24 @@ export function createMoonGridView({ year, months, onSelectDate, announce }) {
         panEnabled = false;
         frustumW = fitW;
         frustumH = fitH;
+        pxPerWorldUnit = width / frustumW;
+        topInsetWorld = getTopInset() / pxPerWorldUnit;
         panX = centerX;
-        panY = centerY;
+        // Fit mode already centers content with an even top/bottom margin
+        // (frustumH - contentHeight, split both ways) — usually more than
+        // enough to clear the nav on its own. Only nudge content down by
+        // whatever's left over after that existing margin, rather than the
+        // full inset, so desktop/wide screens (which already have plenty of
+        // headroom) don't get an oversized, oddly-placed gap under the nav.
+        const existingTopMargin = (frustumH - contentHeight) / 2;
+        panY = centerY + Math.max(0, topInsetWorld - existingTopMargin);
       } else {
         panEnabled = true;
         const targetPxPerWorldUnit = MIN_CELL_PX / cellDiameterWorld;
         frustumW = width / targetPxPerWorldUnit;
         frustumH = height / targetPxPerWorldUnit;
+        pxPerWorldUnit = targetPxPerWorldUnit;
+        topInsetWorld = getTopInset() / pxPerWorldUnit;
         if (!panInitialized) {
           // Start at the top-left (day 1 / first month), the natural
           // reading start, rather than centered on the whole grid.
@@ -572,8 +590,13 @@ export function createMoonGridView({ year, months, onSelectDate, announce }) {
         clampPan();
       }
       panInitialized = true;
-      pxPerWorldUnit = width / frustumW;
       applyCamera();
+    },
+
+    // Called by main.js when the user flips the rings toggle while this
+    // grid is already mounted — updates in place, no rebuild needed.
+    setRingsVisible(visible) {
+      for (const { sprite } of ringSprites) sprite.visible = visible;
     },
 
     dispose() {

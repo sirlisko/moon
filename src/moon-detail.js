@@ -8,7 +8,35 @@ const BASE_ROTATION_Y = Math.PI * 1.54;
 const BASE_ROTATION_X = Math.PI * 0.02;
 const REFRESH_INTERVAL_MS = 30000;
 const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, 0, 5);
-const DEFAULT_CAMERA_DIR = DEFAULT_CAMERA_POSITION.clone().normalize();
+const CAMERA_DEFAULT_DISTANCE = DEFAULT_CAMERA_POSITION.length();
+// Keeps the camera from crossing into the moon's surface (radius 2, plus a
+// little headroom for the displacement map) when zooming in, and from
+// zooming out so far the Moon shrinks to nothing in the starfield.
+const MIN_ZOOM_DISTANCE = 2.5;
+const MAX_ZOOM_DISTANCE = 20;
+
+const MOON_RADIUS = 2;
+const DEFAULT_FOV = 75;
+// How much bigger the Moon's angular size is allowed to get relative to the
+// (shrunk, on a narrow screen) horizontal field of view before we widen the
+// FOV to compensate — 1.0 would mean "touching the edges exactly."
+const FOV_FIT_MARGIN = 1.15;
+
+// A fixed vertical FOV (three.js's `fov` is always vertical) looks fine on
+// a landscape/desktop screen, but on a tall narrow phone the *horizontal*
+// FOV it implies shrinks enough to crop the Moon at the sides — even at
+// the default, non-zoomed camera distance. Widen the FOV just enough to
+// keep the Moon fully in frame at that default distance; zooming itself is
+// unaffected since it changes camera distance, not FOV.
+function computeFov(aspect) {
+  if (aspect >= 1) return DEFAULT_FOV;
+  const halfVFovRad = THREE.MathUtils.degToRad(DEFAULT_FOV / 2);
+  const currentHalfHFovRad = Math.atan(Math.tan(halfVFovRad) * aspect);
+  const moonHalfAngleRad = Math.asin(MOON_RADIUS / CAMERA_DEFAULT_DISTANCE) * FOV_FIT_MARGIN;
+  if (currentHalfHFovRad >= moonHalfAngleRad) return DEFAULT_FOV;
+  const neededHalfVFovRad = Math.atan(Math.tan(moonHalfAngleRad) / aspect);
+  return THREE.MathUtils.radToDeg(neededHalfVFovRad) * 2;
+}
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -29,7 +57,7 @@ const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute
 // a later grant still takes effect via refreshLocation().
 export function createMoonDetailView({ date, location, live, onBack, onRequestLocation, announce }) {
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
+  const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 0.1, 1000);
   camera.position.copy(DEFAULT_CAMERA_POSITION);
 
   const moon = new THREE.Mesh(
@@ -98,21 +126,23 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
     const lines = [phaseLine];
     if (moonState.horizon) {
       const alt = moonState.horizon.altitude;
-      const when = live ? "right now" : "at local noon";
+      const when = live ? "now" : "at noon";
       lines.push(
         alt > 0
-          ? `${alt.toFixed(0)}° above the ${azimuthToCompass(moonState.horizon.azimuth)} horizon ${when}`
-          : `below the horizon ${when}`
+          ? `${alt.toFixed(0)}° above ${azimuthToCompass(moonState.horizon.azimuth)} horizon ${when}`
+          : `below horizon ${when}`
       );
       if (moonState.moonrise || moonState.moonset) {
-        const rise = moonState.moonrise ? `Moonrise ${TIME_FORMAT.format(moonState.moonrise)}` : "No moonrise today";
-        const set = moonState.moonset ? `Moonset ${TIME_FORMAT.format(moonState.moonset)}` : "No moonset today";
+        // ↑/↓ rather than "Moonrise"/"Moonset" — same info, far less width,
+        // which matters a lot once this is stacked 3 lines deep on a phone.
+        const rise = moonState.moonrise ? `↑ ${TIME_FORMAT.format(moonState.moonrise)}` : "no rise today";
+        const set = moonState.moonset ? `↓ ${TIME_FORMAT.format(moonState.moonset)}` : "no set today";
         lines.push(`${rise} · ${set}`);
       }
     } else if (location.status === "denied") {
-      lines.push("Location unavailable — showing geocentric view");
+      lines.push("Location not available");
     } else if (location.status === "unsupported") {
-      lines.push("Geolocation not supported — showing geocentric view");
+      lines.push("Location not supported on this browser");
     }
     if (!live) lines.push(DATE_FORMAT.format(date));
     if (label) label.innerHTML = lines.join("<br>");
@@ -173,6 +203,8 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
       controls.enablePan = false;
       controls.enableDamping = true;
       controls.dampingFactor = 0.25;
+      controls.minDistance = MIN_ZOOM_DISTANCE;
+      controls.maxDistance = MAX_ZOOM_DISTANCE;
 
       refresh();
       if (live) {
@@ -186,11 +218,11 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
       moon.rotation.z = moonState.parallacticAngle;
       controls.update();
 
-      // Only rotation away from the default view matters here — zooming
-      // in/out doesn't change which way you're "looking," so it shouldn't
-      // surface the reset control.
-      const rotated = camera.position.clone().normalize().dot(DEFAULT_CAMERA_DIR) < 0.9999;
-      if (resetButton) resetButton.hidden = !rotated;
+      // Covers rotation and zoom in one check — any real difference from
+      // the default camera position (direction or distance) means there's
+      // something for "Reset view" to reset.
+      const moved = camera.position.distanceTo(DEFAULT_CAMERA_POSITION) > 0.01;
+      if (resetButton) resetButton.hidden = !moved;
     },
 
     render(renderer) {
@@ -199,6 +231,7 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
 
     resize(width, height) {
       camera.aspect = width / height;
+      camera.fov = computeFov(camera.aspect);
       camera.updateProjectionMatrix();
     },
 

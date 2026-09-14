@@ -215,25 +215,47 @@ body {
   color: rgba(255, 255, 255, 0.8);
   min-width: 9ch;
   text-align: center;
+  white-space: nowrap;
 }
 
-#about-button {
+/* top is set inline by layoutChromeButtons() in main.js when it would
+   otherwise overlap the nav pill; this is just the default position. */
+#chrome-buttons {
   position: fixed;
-  bottom: 20px;
-  left: 20px;
+  top: 20px;
+  right: 20px;
   z-index: 10;
+  display: flex;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   pointer-events: auto;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(20, 20, 24, 0.55);
   color: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 999px;
-  padding: 8px 14px;
-  font-size: 13px;
+  border-radius: 50%;
+  backdrop-filter: blur(8px);
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
 }
-#about-button:hover {
+.icon-button:hover {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
+}
+.icon-button[hidden] {
+  display: none;
+}
+.icon-button.active {
+  background: rgba(255, 176, 32, 0.18);
+  border-color: rgba(255, 176, 32, 0.4);
+  color: #ffb020;
 }
 
 #about-overlay {
@@ -312,6 +334,7 @@ body {
 
 @media (max-width: 480px) {
   #app-nav {
+    top: 16px;
     gap: 4px;
     padding: 5px;
   }
@@ -352,15 +375,41 @@ body {
   .moon-label {
     font-size: 12px;
   }
-  #about-button {
-    bottom: 16px;
-    left: 16px;
-    padding: 7px 12px;
-    font-size: 12px;
+  #chrome-buttons {
+    top: 16px;
+    right: 16px;
+    gap: 6px;
+  }
+  .icon-button {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
   }
   #about-card {
     padding: 22px;
     font-size: 13px;
+  }
+}
+
+/* The 480px breakpoint's sizing is marginal on genuinely small phones (an
+   iPhone SE-class 320px-wide screen) — "Today"/"Month"/"Year" can overflow
+   by just a few px and tear "Year" onto its own orphaned line. Shrink
+   further rather than let that happen. */
+@media (max-width: 370px) {
+  #app-nav {
+    gap: 2px;
+    padding: 4px;
+  }
+  #app-nav button {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+  #grid-label {
+    font-size: 11px;
+    min-width: 0;
+  }
+  .moon-label {
+    font-size: 11px;
   }
 }
 

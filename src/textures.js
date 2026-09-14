@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
-const COLOR_URL = "./lroc_color_2k.jpg";
-const DISPLACEMENT_URL = "./ldem_3_8bit.jpg";
+const COLOR_URL = "/lroc_color_2k.jpg";
+const DISPLACEMENT_URL = "/ldem_3_8bit.jpg";
 
 let colorMap = null;
 let displacementMap = null;

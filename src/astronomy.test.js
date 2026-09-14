@@ -48,8 +48,8 @@ describe("azimuthToCompass", () => {
 
 describe("daysInMonth", () => {
   it("knows normal month lengths", () => {
-    expect(daysInMonth(2026, 0)).toBe(31); // January
-    expect(daysInMonth(2026, 3)).toBe(30); // April
+    expect(daysInMonth(2026, 0)).toBe(31);
+    expect(daysInMonth(2026, 3)).toBe(30);
   });
 
   it("gets February leap-year edge cases right", () => {
