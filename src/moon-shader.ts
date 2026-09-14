@@ -7,7 +7,7 @@ const AMBIENT = 0.04;
 // per-cell shader material and the detail view's DirectionalLight derive
 // their lighting from this same function, so the two views can't diverge.
 // theta=0 → new moon (light behind moon), theta=π → full moon (light toward viewer).
-export function sunDirFromPhase(phase) {
+export function sunDirFromPhase(phase: number): THREE.Vector3 {
   const theta = phase * 2 * Math.PI;
   return new THREE.Vector3(Math.sin(theta), 0.1, -Math.cos(theta)).normalize();
 }
@@ -40,7 +40,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 // involved, just a per-material sun-direction uniform — lets hundreds of
 // cells each show a different, correct terminator without touching
 // three.js's scene-light/light-count machinery.
-export function createMoonCellMaterial(colorMap, phase) {
+export function createMoonCellMaterial(colorMap: THREE.Texture, phase: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       map: { value: colorMap },

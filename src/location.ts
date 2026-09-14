@@ -1,7 +1,12 @@
-export function createLocationState() {
-  const location = { coords: null, status: "idle" }; // idle | pending | granted | denied | unsupported
+import type { LocationState } from "./types.js";
 
-  function requestLocation(onChange) {
+export function createLocationState(): {
+  location: LocationState;
+  requestLocation: (onChange?: () => void) => void;
+} {
+  const location: LocationState = { coords: null, status: "idle" };
+
+  function requestLocation(onChange?: () => void) {
     if (location.status === "pending" || location.status === "granted") return;
     if (!navigator.geolocation) {
       location.status = "unsupported";

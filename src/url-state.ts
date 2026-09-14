@@ -1,6 +1,7 @@
 import { localNoon } from "./astronomy.js";
+import type { AppState, AppView } from "./types.js";
 
-function formatISODate(date) {
+function formatISODate(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
@@ -10,16 +11,16 @@ function formatISODate(date) {
 // Keeps the URL a shareable/bookmarkable reflection of `state`. Uses
 // `window.location` explicitly — a bare `location` would resolve to
 // main.js's geolocation state object instead, wherever this is called from.
-export function syncUrl(state) {
+export function syncUrl(state: AppState): void {
   const params = new URLSearchParams();
   if (state.view === "month") {
     params.set("view", "month");
-    params.set("year", state.year);
-    params.set("month", state.month + 1);
+    params.set("year", String(state.year));
+    params.set("month", String(state.month + 1));
   } else if (state.view === "year") {
     params.set("view", "year");
-    params.set("year", state.year);
-  } else if (state.view === "detail") {
+    params.set("year", String(state.year));
+  } else if (state.view === "detail" && state.detailDate) {
     params.set("view", "detail");
     params.set("date", formatISODate(state.detailDate));
   }
@@ -32,13 +33,14 @@ export function syncUrl(state) {
 // Restores state from a shared/bookmarked URL on load, mutating `state` in
 // place and calling `setView` for whichever view it resolves to, falling
 // back to "today" for anything missing or malformed.
-export function setViewFromUrl(state, setView) {
+export function setViewFromUrl(state: AppState, setView: (view: AppView) => void): void {
   const params = new URLSearchParams(window.location.search);
   const view = params.get("view");
+  const dateParam = params.get("date");
 
-  if (view === "detail" && params.get("date")) {
-    const [y, m, d] = params.get("date").split("-").map(Number);
-    if (y && m >= 1 && m <= 12 && d >= 1) {
+  if (view === "detail" && dateParam) {
+    const [y, m, d] = dateParam.split("-").map(Number);
+    if (y && m && d && m >= 1 && m <= 12 && d >= 1) {
       state.detailDate = localNoon(y, m - 1, d);
       // No natural "came from" grid for a direct link — send it to that
       // date's month view. onBack only reads state.returnTo.view and
