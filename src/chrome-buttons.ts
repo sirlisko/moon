@@ -1,20 +1,30 @@
 const RINGS_STORAGE_KEY = "moon:showRings"; // off by default — a cleaner-looking grid — remembered across visits
+const CALENDAR_STORAGE_KEY = "moon:calendarMode"; // on by default — remembered across visits, opt-out via the toggle
 
 export interface ChromeButtonsOptions {
   nav: HTMLElement;
   announce?: (text: string) => void;
   onToggleRings?: (visible: boolean) => void;
+  onToggleCalendarMode?: (calendarMode: boolean) => void;
 }
 
 export interface ChromeButtons {
   ringsButton: HTMLButtonElement;
+  calendarModeButton: HTMLButtonElement;
   layoutChromeButtons: () => void;
   getTopInset: () => number;
   getShowRings: () => boolean;
+  getCalendarMode: () => boolean;
 }
 
-export function createChromeButtons({ nav, announce, onToggleRings }: ChromeButtonsOptions): ChromeButtons {
+export function createChromeButtons({
+  nav,
+  announce,
+  onToggleRings,
+  onToggleCalendarMode,
+}: ChromeButtonsOptions): ChromeButtons {
   let showRings = localStorage.getItem(RINGS_STORAGE_KEY) === "1";
+  let calendarMode = localStorage.getItem(CALENDAR_STORAGE_KEY) !== "0";
 
   const chromeButtons = document.createElement("div");
   chromeButtons.id = "chrome-buttons";
@@ -66,6 +76,34 @@ export function createChromeButtons({ nav, announce, onToggleRings }: ChromeButt
     ringsButton.setAttribute("aria-label", ringsHint());
     onToggleRings?.(showRings);
     announce?.(showRings ? "New and full moon markers on." : "New and full moon markers off.");
+  });
+
+  // Month-view-only — swaps the continuous day-of-month strip for a
+  // traditional Sun–Sat week grid. Hidden outside month view by main.js,
+  // same as ringsButton is hidden outside month/year.
+  function calendarModeHint() {
+    return calendarMode ? "Switch to line view" : "Switch to calendar view";
+  }
+
+  const calendarModeButton = document.createElement("button");
+  calendarModeButton.id = "calendar-mode-button";
+  calendarModeButton.className = "icon-button";
+  calendarModeButton.textContent = "▦";
+  calendarModeButton.title = calendarModeHint();
+  calendarModeButton.setAttribute("aria-label", calendarModeHint());
+  calendarModeButton.setAttribute("aria-pressed", String(calendarMode));
+  calendarModeButton.classList.toggle("active", calendarMode);
+  chromeButtons.appendChild(calendarModeButton);
+
+  calendarModeButton.addEventListener("click", () => {
+    calendarMode = !calendarMode;
+    localStorage.setItem(CALENDAR_STORAGE_KEY, calendarMode ? "1" : "0");
+    calendarModeButton.classList.toggle("active", calendarMode);
+    calendarModeButton.setAttribute("aria-pressed", String(calendarMode));
+    calendarModeButton.title = calendarModeHint();
+    calendarModeButton.setAttribute("aria-label", calendarModeHint());
+    onToggleCalendarMode?.(calendarMode);
+    announce?.(calendarMode ? "Calendar view." : "Line view.");
   });
 
   const shareButton = document.createElement("button");
@@ -145,8 +183,10 @@ export function createChromeButtons({ nav, announce, onToggleRings }: ChromeButt
 
   return {
     ringsButton,
+    calendarModeButton,
     layoutChromeButtons,
     getTopInset,
     getShowRings: () => showRings,
+    getCalendarMode: () => calendarMode,
   };
 }

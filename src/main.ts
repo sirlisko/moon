@@ -132,6 +132,10 @@ const chrome = createChromeButtons({
   nav,
   announce,
   onToggleRings: (visible) => activeView?.setRingsVisible?.(visible),
+  // Calendar/line is a structural layout change (not a live toggle like
+  // rings), and only ever visible while month view is active — safe to
+  // just rebuild the current view.
+  onToggleCalendarMode: () => setView(state.view),
 });
 
 function setView(kind: AppView) {
@@ -146,6 +150,9 @@ function setView(kind: AppView) {
   // The rings toggle only means anything on the grid — showing it on
   // Today/detail (where there's nothing to toggle) is just confusing.
   chrome.ringsButton.hidden = kind !== "month" && kind !== "year";
+  // Calendar/line only means anything for a single month — year view
+  // always uses the strip layout regardless of the stored preference.
+  chrome.calendarModeButton.hidden = kind !== "month";
 
   if (kind === "today") {
     gridNav.hidden = false;
@@ -172,6 +179,7 @@ function setView(kind: AppView) {
       announce,
       showRings: chrome.getShowRings(),
       getTopInset: chrome.getTopInset,
+      calendarMode: kind === "month" && chrome.getCalendarMode(),
     });
   } else if (kind === "detail") {
     gridNav.hidden = false;
