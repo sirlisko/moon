@@ -8,6 +8,7 @@ import { getColorMap, onColorMapReady } from "./textures.js";
 import { createLocationState } from "./location.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
+import { createDatePicker } from "./date-picker.js";
 import type { AppState, AppView, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
@@ -73,7 +74,7 @@ nav.innerHTML = `
   <button data-view="year">Year</button>
   <span id="grid-nav" hidden>
     <button id="grid-prev" aria-label="Previous">‹</button>
-    <span id="grid-label"></span>
+    <button id="grid-label" type="button" title="Jump to a date"></button>
     <button id="grid-next" aria-label="Next">›</button>
   </span>
 `;
@@ -81,9 +82,47 @@ document.body.appendChild(nav);
 
 const navButtons = nav.querySelectorAll<HTMLButtonElement>("button[data-view]");
 const gridNav = nav.querySelector<HTMLElement>("#grid-nav")!;
-const gridLabel = nav.querySelector<HTMLElement>("#grid-label")!;
+const gridLabel = nav.querySelector<HTMLButtonElement>("#grid-label")!;
 const gridPrev = nav.querySelector<HTMLButtonElement>("#grid-prev")!;
 const gridNext = nav.querySelector<HTMLButtonElement>("#grid-next")!;
+const datePicker = createDatePicker();
+
+gridLabel.addEventListener("click", () => {
+  if (state.view === "month") {
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "month",
+      year: state.year,
+      month: state.month,
+      onSelect: ({ year, month }) => {
+        state.year = year;
+        state.month = month;
+        setView("month");
+      },
+    });
+  } else if (state.view === "year") {
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "year",
+      year: state.year,
+      month: 0,
+      onSelect: ({ year }) => {
+        state.year = year;
+        setView("year");
+      },
+    });
+  } else {
+    const current = state.view === "detail" ? state.detailDate! : new Date();
+    datePicker.open({
+      anchor: gridLabel,
+      mode: "day",
+      year: current.getFullYear(),
+      month: current.getMonth(),
+      day: current.getDate(),
+      onSelect: ({ year, month, day }) => goToDetail(new Date(year, month, day!)),
+    });
+  }
+});
 
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -156,7 +195,8 @@ function setView(kind: AppView) {
 
   if (kind === "today") {
     gridNav.hidden = false;
-    gridLabel.textContent = NAV_DATE_FORMAT.format(new Date());
+    const today = new Date();
+    gridLabel.textContent = NAV_DATE_FORMAT.format(today);
     document.title = `Today, ${gridLabel.textContent} · Moon`;
     activeView = createMoonDetailView({
       date: null,
