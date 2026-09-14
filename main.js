@@ -1,218 +1,234 @@
 import "./style.css";
 
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import {
-  Body,
-  Illumination,
-  MoonPhase,
-  Libration,
-  Observer,
-  Equator,
-  Horizon,
-  SiderealTime,
-} from "astronomy-engine";
+import { MONTH_NAMES } from "./astronomy.js";
+import { createMoonDetailView } from "./moon-detail.js";
+import { createMoonGridView } from "./moon-grid.js";
 
-const textureURL = "./lroc_color_2k.jpg";
-const displacementURL = "./ldem_3_8bit.jpg";
-
-function getPhaseName(phase) {
-  if (phase < 0.025 || phase >= 0.975) return "New Moon";
-  if (phase < 0.225) return "Waxing Crescent";
-  if (phase < 0.275) return "First Quarter";
-  if (phase < 0.475) return "Waxing Gibbous";
-  if (phase < 0.525) return "Full Moon";
-  if (phase < 0.725) return "Waning Gibbous";
-  if (phase < 0.775) return "Last Quarter";
-  return "Waning Crescent";
-}
-
-// Angle between the sky's zenith direction and the Moon's north pole, as seen
-// by the observer — this is what actually tilts the crescent/terminator to
-// match how the Moon looks in the local sky, and depends on latitude + time.
-function computeParallacticAngle(date, observer, ra, dec) {
-  const gastHours = SiderealTime(date);
-  const lstHours = ((gastHours + observer.longitude / 15) % 24 + 24) % 24;
-  const hourAngleDeg = (lstHours - ra) * 15;
-  const H = hourAngleDeg * (Math.PI / 180);
-  const lat = observer.latitude * (Math.PI / 180);
-  const decRad = dec * (Math.PI / 180);
-  return Math.atan2(
-    Math.sin(H),
-    Math.tan(lat) * Math.cos(decRad) - Math.sin(decRad) * Math.cos(H)
-  );
-}
-
-// Combines the Moon's real illumination/libration with the observer's
-// location (when available) to produce everything the render needs.
-function computeMoonState(observerCoords) {
-  const date = new Date();
-  const illum = Illumination(Body.Moon, date);
-  const phase = MoonPhase(date) / 360; // 0 = new, 0.5 = full, 1 = next new
-  const lib = Libration(date);
-
-  let parallacticAngle = 0;
-  let horizon = null;
-  if (observerCoords) {
-    const observer = new Observer(observerCoords.lat, observerCoords.lon, 0);
-    const eq = Equator(Body.Moon, date, observer, true, true);
-    horizon = Horizon(date, observer, eq.ra, eq.dec, "normal");
-    parallacticAngle = computeParallacticAngle(date, observer, eq.ra, eq.dec);
-  }
-
-  return {
-    phase,
-    illuminatedPercent: Math.round(illum.phase_fraction * 100),
-    libLonRad: lib.elon * (Math.PI / 180),
-    libLatRad: lib.elat * (Math.PI / 180),
-    parallacticAngle,
-    horizon,
-  };
-}
-
-const COMPASS = [
-  "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
-];
-function azimuthToCompass(deg) {
-  return COMPASS[Math.round(deg / 22.5) % 16];
-}
-
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector("#bg") });
-
+const canvas = document.querySelector("#bg");
+const renderer = new THREE.WebGLRenderer({ canvas });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
-camera.position.z = 5;
-renderer.render(scene, camera);
 
-const textureLoader = new THREE.TextureLoader();
-const texture = textureLoader.load(textureURL);
-texture.encoding = THREE.sRGBEncoding; // color map — gamma-correct; displacement/bump stays linear
-const displacementMap = textureLoader.load(displacementURL);
+const viewContainer = document.createElement("div");
+viewContainer.id = "view-overlay";
+document.body.appendChild(viewContainer);
 
-const moon = new THREE.Mesh(
-  new THREE.SphereGeometry(2, 60, 60),
-  new THREE.MeshPhongMaterial({
-    color: 0xffffff,
-    map: texture,
-    displacementMap: displacementMap,
-    displacementScale: 0.06,
-    bumpMap: displacementMap,
-    bumpScale: 0.04,
-    reflectivity: 0,
-    shininess: 0,
-  })
-);
-moon.rotation.x = Math.PI * 0.02;
-moon.rotation.y = Math.PI * 1.54;
-scene.add(moon);
+// Shared, mutable — geolocation is only requested when the user clicks
+// "Use my location" (see requestLocation below), never automatically.
+// Views read location.coords/status fresh each refresh, so a later grant
+// still applies to whichever view is active at the time.
+const location = { coords: null, status: "idle" }; // idle | pending | granted | denied | unsupported
 
-// Static star field — points distributed uniformly on a large sphere
-const starPositions = new Float32Array(8000 * 3);
-for (let i = 0; i < 8000; i++) {
-  const phi = Math.acos(2 * Math.random() - 1);
-  const theta = Math.random() * Math.PI * 2;
-  const r = 800;
-  starPositions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
-  starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-  starPositions[i * 3 + 2] = r * Math.cos(phi);
-}
-const starGeometry = new THREE.BufferGeometry();
-starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
-const stars = new THREE.Points(
-  starGeometry,
-  new THREE.PointsMaterial({ color: 0xffffff, size: 0.7, sizeAttenuation: true })
-);
-scene.add(stars);
-
-// Sun direction derived from today's phase.
-// theta=0 → new moon (light behind moon), theta=π → full moon (light toward viewer / camera).
-const sunLight = new THREE.DirectionalLight(0xffffff, 1.6);
-scene.add(sunLight);
-
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.015);
-hemiLight.color.setHSL(0.6, 1, 0.6);
-hemiLight.groundColor.setHSL(0.095, 1, 0.75);
-scene.add(hemiLight);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enablePan = false;
-controls.enableDamping = true;
-controls.dampingFactor = 0.25;
-
-const label = document.createElement("div");
-label.style.cssText =
-  "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);" +
-  "color:rgba(255,255,255,0.6);font-family:system-ui,sans-serif;" +
-  "font-size:13px;letter-spacing:0.12em;text-transform:uppercase;" +
-  "text-align:center;pointer-events:none;";
-document.body.appendChild(label);
-
-// Observer coordinates, filled in once geolocation resolves (or left null
-// to fall back to a geocentric-only render, with no local sky tilt applied).
-let observerCoords = null;
-let locationNote = "Locating…";
-let moonState;
-
-function refreshMoonState() {
-  moonState = computeMoonState(observerCoords);
-
-  const sunTheta = moonState.phase * 2 * Math.PI;
-  sunLight.position.set(100 * Math.sin(sunTheta), 10, -100 * Math.cos(sunTheta));
-
-  const lines = [
-    `${getPhaseName(moonState.phase)} · ${moonState.illuminatedPercent}% illuminated`,
-  ];
-  if (moonState.horizon) {
-    const alt = moonState.horizon.altitude;
-    lines.push(
-      alt > 0
-        ? `${alt.toFixed(0)}° above the ${azimuthToCompass(moonState.horizon.azimuth)} horizon`
-        : `below the horizon right now`
-    );
-  } else {
-    lines.push(locationNote);
+function requestLocation() {
+  if (location.status === "pending" || location.status === "granted") return;
+  if (!navigator.geolocation) {
+    location.status = "unsupported";
+    activeView?.refreshLocation?.();
+    return;
   }
-  label.innerHTML = lines.join("<br>");
-}
-
-refreshMoonState();
-setInterval(refreshMoonState, 30000);
-
-if (navigator.geolocation) {
+  location.status = "pending";
+  activeView?.refreshLocation?.();
   navigator.geolocation.getCurrentPosition(
     (position) => {
-      observerCoords = {
-        lat: position.coords.latitude,
-        lon: position.coords.longitude,
-      };
-      refreshMoonState();
+      location.coords = { lat: position.coords.latitude, lon: position.coords.longitude };
+      location.status = "granted";
+      activeView?.refreshLocation?.();
     },
     () => {
-      locationNote = "Location unavailable — showing geocentric view";
-      refreshMoonState();
+      location.status = "denied";
+      activeView?.refreshLocation?.();
     }
   );
-} else {
-  locationNote = "Geolocation not supported — showing geocentric view";
 }
+
+const NAV_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
+
+const now = new Date();
+const state = {
+  view: "today", // "today" | "month" | "year" | "detail"
+  year: now.getFullYear(),
+  month: now.getMonth(),
+  detailDate: null,
+  returnTo: null,
+};
+
+let activeView = null;
+
+const nav = document.createElement("nav");
+nav.id = "app-nav";
+nav.innerHTML = `
+  <button data-view="today">Today</button>
+  <button data-view="month">Month</button>
+  <button data-view="year">Year</button>
+  <span id="grid-nav" hidden>
+    <button id="grid-prev" aria-label="Previous">‹</button>
+    <span id="grid-label"></span>
+    <button id="grid-next" aria-label="Next">›</button>
+  </span>
+`;
+document.body.appendChild(nav);
+
+const navButtons = nav.querySelectorAll("button[data-view]");
+const gridNav = nav.querySelector("#grid-nav");
+const gridLabel = nav.querySelector("#grid-label");
+const gridPrev = nav.querySelector("#grid-prev");
+const gridNext = nav.querySelector("#grid-next");
+
+navButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const kind = btn.dataset.view;
+    const today = new Date();
+    if (kind === "month" || kind === "year") {
+      state.year = today.getFullYear();
+      state.month = today.getMonth();
+    }
+    setView(kind);
+  });
+});
+
+gridPrev.addEventListener("click", () => stepNav(-1));
+gridNext.addEventListener("click", () => stepNav(1));
+
+function stepNav(delta) {
+  if (state.view === "month") {
+    state.month += delta;
+    if (state.month < 0) { state.month = 11; state.year -= 1; }
+    if (state.month > 11) { state.month = 0; state.year += 1; }
+  } else if (state.view === "year") {
+    state.year += delta;
+  } else if (state.view === "today") {
+    // Stepping away from "today" leaves live mode — it becomes a normal
+    // detail view for that date, with "Today" itself as the way back.
+    const next = new Date();
+    next.setDate(next.getDate() + delta);
+    goToDetail(next);
+    return;
+  } else if (state.view === "detail") {
+    const next = new Date(state.detailDate);
+    next.setDate(next.getDate() + delta);
+    state.detailDate = next;
+  }
+  setView(state.view);
+}
+
+function goToDetail(date) {
+  state.returnTo = { view: state.view, year: state.year, month: state.month };
+  state.detailDate = date;
+  setView("detail");
+}
+
+function setView(kind) {
+  if (activeView) {
+    activeView.dispose();
+    activeView = null;
+  }
+  viewContainer.innerHTML = "";
+  state.view = kind;
+
+  navButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === kind));
+
+  if (kind === "today") {
+    gridNav.hidden = false;
+    gridLabel.textContent = NAV_DATE_FORMAT.format(new Date());
+    activeView = createMoonDetailView({
+      date: null,
+      location,
+      live: true,
+      onBack: null,
+      onRequestLocation: requestLocation,
+    });
+  } else if (kind === "month" || kind === "year") {
+    gridNav.hidden = false;
+    gridLabel.textContent =
+      kind === "month" ? `${MONTH_NAMES[state.month]} ${state.year}` : `${state.year}`;
+    const months = kind === "month" ? [state.month] : [...Array(12).keys()];
+    activeView = createMoonGridView({ year: state.year, months, onSelectDate: goToDetail });
+  } else if (kind === "detail") {
+    gridNav.hidden = false;
+    gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate);
+    activeView = createMoonDetailView({
+      date: state.detailDate,
+      location,
+      live: false,
+      onBack: () => setView(state.returnTo.view),
+      onRequestLocation: requestLocation,
+    });
+  }
+
+  activeView.mount(viewContainer, renderer);
+  activeView.resize(window.innerWidth, window.innerHeight);
+}
+
+const aboutButton = document.createElement("button");
+aboutButton.id = "about-button";
+aboutButton.textContent = "ⓘ About";
+aboutButton.setAttribute("aria-label", "About this app");
+document.body.appendChild(aboutButton);
+
+const aboutOverlay = document.createElement("div");
+aboutOverlay.id = "about-overlay";
+aboutOverlay.hidden = true;
+aboutOverlay.innerHTML = `
+  <div id="about-card" role="dialog" aria-label="About this app">
+    <button id="about-close" aria-label="Close">×</button>
+    <h2>About this moon</h2>
+    <p>
+      A real-time 3D render of the Moon as it actually looks from your
+      location — plus a calendar of every day's phase, laid out like a
+      printed lunar poster.
+    </p>
+    <p class="about-byline">
+      Made by Luca Lischetti — <a href="https://sirlisko.com" target="_blank" rel="noopener">sirlisko</a>
+    </p>
+    <h3>How it works</h3>
+    <ul>
+      <li>Phase, illumination, and libration (the Moon's slight wobble) come from real ephemeris calculations, not an approximation of the ~29.5-day cycle.</li>
+      <li>Sharing your location adds the parallactic angle — the tilt caused by where you're standing on Earth — so the crescent's orientation matches what you'd actually see looking up, plus its real altitude/azimuth in your sky.</li>
+      <li>Calendar cells use the same phase math, evaluated once per day at local noon; clicking one opens the full detail view for that date.</li>
+      <li>Nothing you enter leaves your browser — location is used only to compute the render, never sent anywhere.</li>
+    </ul>
+    <h3>Credits</h3>
+    <ul>
+      <li>Lunar imagery: <a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a> — color from LRO/LROC's Hapke-normalized WAC mosaic, elevation from LOLA.</li>
+      <li>Astronomical calculations: <a href="https://github.com/cosinekitty/astronomy" target="_blank" rel="noopener">astronomy-engine</a> by Don Cross.</li>
+      <li>Rendering: <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a>.</li>
+    </ul>
+  </div>
+`;
+document.body.appendChild(aboutOverlay);
+
+const aboutCard = aboutOverlay.querySelector("#about-card");
+function openAbout() {
+  aboutOverlay.hidden = false;
+}
+function closeAbout() {
+  aboutOverlay.hidden = true;
+}
+aboutButton.addEventListener("click", openAbout);
+aboutOverlay.querySelector("#about-close").addEventListener("click", closeAbout);
+aboutOverlay.addEventListener("click", (e) => {
+  if (!aboutCard.contains(e.target)) closeAbout();
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !aboutOverlay.hidden) closeAbout();
+});
 
 function animate() {
   requestAnimationFrame(animate);
-  moon.rotation.y = Math.PI * 1.54 + moonState.libLonRad;
-  moon.rotation.x = Math.PI * 0.02 + moonState.libLatRad;
-  moon.rotation.z = moonState.parallacticAngle;
-  controls.update();
-  renderer.render(scene, camera);
+  activeView?.update();
+  activeView?.render(renderer);
 }
 
+setView("today");
 animate();
 
 window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  activeView?.resize(window.innerWidth, window.innerHeight);
 });
