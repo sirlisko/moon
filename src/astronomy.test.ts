@@ -110,8 +110,8 @@ describe("computeMoonState", () => {
   it("fills them in once observer coordinates are given", () => {
     const s = computeMoonState(new Date("2026-09-14T12:00:00Z"), { lat: 45.5, lon: -73.5 });
     expect(s.horizon).not.toBeNull();
-    expect(typeof s.horizon.altitude).toBe("number");
-    expect(typeof s.horizon.azimuth).toBe("number");
+    expect(typeof s.horizon!.altitude).toBe("number");
+    expect(typeof s.horizon!.azimuth).toBe("number");
   });
 });
 

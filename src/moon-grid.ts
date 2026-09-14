@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { computeMoonVisual, daysInMonth, localNoon, getPhaseName, MONTH_NAMES } from "./astronomy.js";
 import { getColorMap } from "./textures.js";
 import { createMoonCellMaterial } from "./moon-shader.js";
+import type { ViewInstance } from "./types.js";
 
 const SPACING = 2.4;
 const CELL_RADIUS = 0.85;
@@ -34,10 +35,40 @@ const RING_SCALE = 1.22;
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
 
+interface CellRef {
+  day: number;
+  row: number;
+}
+
+interface Cell extends CellRef {
+  mesh: THREE.Mesh;
+}
+
+interface SpriteEntry {
+  sprite: THREE.Sprite;
+}
+
+interface MonthLabelEntry extends SpriteEntry {
+  row: number;
+}
+
+interface DayLabelEntry extends SpriteEntry {
+  day: number;
+}
+
+interface RingEntry extends CellRef {
+  sprite: THREE.Sprite;
+}
+
+interface SpriteScale {
+  x: number;
+  y: number;
+}
+
 // Shared across every grid mount — a year view and a month view both reuse
 // the same low-poly sphere; never disposed, only per-cell materials are.
-let sharedCellGeometry = null;
-function getCellGeometry() {
+let sharedCellGeometry: THREE.SphereGeometry | null = null;
+function getCellGeometry(): THREE.SphereGeometry {
   if (!sharedCellGeometry) {
     sharedCellGeometry = new THREE.SphereGeometry(CELL_RADIUS, 20, 14);
   }
@@ -46,14 +77,14 @@ function getCellGeometry() {
 
 // A thin ring texture marking new/full moon days — one shared material for
 // every marked cell across every grid mount, never disposed.
-let sharedRingMaterial = null;
-function getRingMaterial() {
+let sharedRingMaterial: THREE.SpriteMaterial | null = null;
+function getRingMaterial(): THREE.SpriteMaterial {
   if (!sharedRingMaterial) {
     const size = 128;
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d")!;
     const lineWidth = size * 0.035;
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = lineWidth;
@@ -79,9 +110,9 @@ function getRingMaterial() {
 // setLabelHighlighted) rather than by re-rendering the texture. The
 // sprite's on-screen size is likewise controlled entirely via .scale (set
 // later, per layout) rather than by the texture's pixel size.
-function createTextSprite(text, { fontPx = 64 } = {}) {
+function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {}): THREE.Sprite {
   const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d")!;
   ctx.font = `${fontPx}px system-ui, sans-serif`;
   const width = Math.ceil(ctx.measureText(text).width) + fontPx * 0.4;
   const height = fontPx * 1.4;
@@ -103,22 +134,27 @@ function createTextSprite(text, { fontPx = 64 } = {}) {
   });
   const sprite = new THREE.Sprite(material);
   const worldHeight = 0.7;
-  sprite.userData.baseScale = { x: (width / height) * worldHeight, y: worldHeight };
+  sprite.userData.baseScale = { x: (width / height) * worldHeight, y: worldHeight } satisfies SpriteScale;
   return sprite;
 }
 
-function setLabelHighlighted(sprite, highlighted) {
+function setLabelHighlighted(sprite: THREE.Sprite | undefined, highlighted: boolean): void {
   if (!sprite) return;
-  sprite.material.opacity = highlighted ? LABEL_HOVER_OPACITY : LABEL_OPACITY;
-  sprite.material.color.copy(highlighted ? LABEL_HOVER_COLOR : LABEL_COLOR);
-  const base = sprite.userData.currentScale || sprite.userData.baseScale;
+  const material = sprite.material as THREE.SpriteMaterial;
+  material.opacity = highlighted ? LABEL_HOVER_OPACITY : LABEL_OPACITY;
+  material.color.copy(highlighted ? LABEL_HOVER_COLOR : LABEL_COLOR);
+  const base: SpriteScale = sprite.userData.currentScale || sprite.userData.baseScale;
   const boost = highlighted ? LABEL_HOVER_SCALE : 1;
   sprite.scale.set(base.x * boost, base.y * boost, 1);
 }
 
 // "Contain" fit — the whole grid visible, no cropping, letterboxed to match
 // the container's aspect ratio exactly (so spheres stay circular).
-function fitFrustum(contentWidth, contentHeight, containerAspect) {
+function fitFrustum(
+  contentWidth: number,
+  contentHeight: number,
+  containerAspect: number
+): { width: number; height: number } {
   const contentAspect = contentWidth / contentHeight;
   let width, height;
   if (containerAspect > contentAspect) {
@@ -133,11 +169,20 @@ function fitFrustum(contentWidth, contentHeight, containerAspect) {
 
 // Distance from a 0..1 phase fraction to the nearest new moon (0 or 1) / full
 // moon (0.5) — used to find each lunar cycle's single closest calendar day.
-function distToNew(phase) {
+function distToNew(phase: number): number {
   return Math.min(phase, 1 - phase);
 }
-function distToFull(phase) {
+function distToFull(phase: number): number {
   return Math.abs(phase - 0.5);
+}
+
+export interface MoonGridViewOptions {
+  year: number;
+  months: number[];
+  onSelectDate: (date: Date) => void;
+  announce?: (text: string) => void;
+  showRings?: boolean;
+  getTopInset?: () => number;
 }
 
 // months: array of 0-based month indices — [m] for a single month, [0..11]
@@ -145,7 +190,14 @@ function distToFull(phase) {
 // months." On a portrait/narrow viewport the grid transposes — days run
 // vertically and months become columns — since scrolling vertically is the
 // natural mobile gesture, vs. the horizontal "poster" layout on desktop.
-export function createMoonGridView({ year, months, onSelectDate, announce, showRings = false, getTopInset = () => 0 }) {
+export function createMoonGridView({
+  year,
+  months,
+  onSelectDate,
+  announce,
+  showRings = false,
+  getTopInset = () => 0,
+}: MoonGridViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   camera.position.z = 10;
@@ -153,17 +205,17 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   const cols = 31; // days
   const rows = months.length; // months
 
-  const cells = []; // { mesh, day, row }
-  const monthLabels = []; // { sprite, row }
-  const dayLabels = []; // { sprite, day }
-  const ringSprites = []; // { sprite, day, row }
-  const disposables = [];
+  const cells: Cell[] = [];
+  const monthLabels: MonthLabelEntry[] = [];
+  const dayLabels: DayLabelEntry[] = [];
+  const ringSprites: RingEntry[] = [];
+  const disposables: Array<{ dispose(): void }> = [];
 
   months.forEach((month0, row) => {
-    const label = createTextSprite(MONTH_NAMES[month0], { fontPx: 56 });
+    const label = createTextSprite(MONTH_NAMES[month0]!, { fontPx: 56 });
     scene.add(label);
     monthLabels.push({ sprite: label, row });
-    disposables.push(label.material.map, label.material);
+    disposables.push(label.material.map!, label.material);
 
     const n = daysInMonth(year, month0);
     for (let day = 1; day <= n; day++) {
@@ -202,7 +254,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     const label = createTextSprite(String(day), { fontPx: 40 });
     scene.add(label);
     dayLabels.push({ sprite: label, day });
-    disposables.push(label.material.map, label.material);
+    disposables.push(label.material.map!, label.material);
   }
 
   const cellMeshes = cells.map((c) => c.mesh);
@@ -211,9 +263,9 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   const dayLabelByDay = new Map(dayLabels.map((d) => [d.day, d.sprite]));
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
-  let canvas = null;
+  let canvas: HTMLCanvasElement | null = null;
 
-  function cellKey(c) {
+  function cellKey(c: CellRef | null): string | null {
     return c ? `${c.day}-${c.row}` : null;
   }
 
@@ -222,25 +274,25 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   // month/day labels (setLabelHighlighted) and scales the cell mesh itself,
   // so sighted keyboard users can see where they are too, not just via
   // screen-reader announcements.
-  let activeCell = null;
-  function setActiveCell(cell) {
+  let activeCell: CellRef | null = null;
+  function setActiveCell(cell: CellRef | null) {
     if (cellKey(cell) === cellKey(activeCell)) return;
     if (activeCell) {
       setLabelHighlighted(monthLabelByRow.get(activeCell.row), false);
       setLabelHighlighted(dayLabelByDay.get(activeCell.day), false);
-      cellMeshByKey.get(cellKey(activeCell))?.scale.setScalar(cellScale);
+      cellMeshByKey.get(cellKey(activeCell)!)?.scale.setScalar(cellScale);
     }
     if (cell) {
       setLabelHighlighted(monthLabelByRow.get(cell.row), true);
       setLabelHighlighted(dayLabelByDay.get(cell.day), true);
-      cellMeshByKey.get(cellKey(cell))?.scale.setScalar(cellScale * CELL_ACTIVE_SCALE);
+      cellMeshByKey.get(cellKey(cell)!)?.scale.setScalar(cellScale * CELL_ACTIVE_SCALE);
     }
     activeCell = cell;
     if (canvas) canvas.style.cursor = cell ? "pointer" : "";
   }
 
-  function hoverAt(clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
+  function hoverAt(clientX: number, clientY: number) {
+    const rect = canvas!.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
@@ -258,7 +310,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
 
   // "Primary" axis = days (31, the long axis) — X when horizontal, Y when
   // transposed. "Secondary" axis = months (1 or 12) — the other one.
-  function posFor(primaryIndex, secondaryIndex) {
+  function posFor(primaryIndex: number, secondaryIndex: number): { x: number; y: number } {
     return transposed
       ? {
           x: LEFT_GUTTER + secondaryIndex * SPACING + SPACING / 2,
@@ -281,7 +333,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     for (const { mesh, day, row } of cells) {
       const { x, y } = posFor(day - 1, row);
       mesh.position.set(x, y, 0);
-      const isActive = activeCell && activeCell.day === day && activeCell.row === row;
+      const isActive = activeCell !== null && activeCell.day === day && activeCell.row === row;
       mesh.scale.setScalar(cellScale * (isActive ? CELL_ACTIVE_SCALE : 1));
     }
 
@@ -299,7 +351,8 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
         ? { x: LEFT_GUTTER + row * SPACING + SPACING / 2, y: TOP_GUTTER * 0.3 }
         : { x: LEFT_GUTTER * 0.42, y: -TOP_GUTTER - row * SPACING - SPACING / 2 };
       sprite.position.set(x, y, 0);
-      sprite.userData.currentScale = { x: sprite.userData.baseScale.x * cellScale, y: sprite.userData.baseScale.y * cellScale };
+      const base: SpriteScale = sprite.userData.baseScale;
+      sprite.userData.currentScale = { x: base.x * cellScale, y: base.y * cellScale } satisfies SpriteScale;
       sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
     }
 
@@ -310,7 +363,8 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
         ? { x: LEFT_GUTTER * 0.42, y: -TOP_GUTTER - (day - 1) * SPACING - SPACING / 2 }
         : { x: LEFT_GUTTER + (day - 1) * SPACING + SPACING / 2, y: SPACING * 0.15 };
       sprite.position.set(x, y, 0);
-      sprite.userData.currentScale = { x: sprite.userData.baseScale.x * cellScale, y: sprite.userData.baseScale.y * cellScale };
+      const base: SpriteScale = sprite.userData.baseScale;
+      sprite.userData.currentScale = { x: base.x * cellScale, y: base.y * cellScale } satisfies SpriteScale;
       sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
     }
   }
@@ -355,7 +409,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
 
   // Pans just enough to bring a cell (plus a small margin) back within the
   // current viewport — used when keyboard focus moves outside the pan window.
-  function ensureVisible(cell) {
+  function ensureVisible(cell: CellRef) {
     if (!panEnabled) return;
     const { x, y } = posFor(cell.day - 1, cell.row);
     const margin = SPACING * 0.6;
@@ -380,8 +434,8 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     }
   }
 
-  function selectAt(clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
+  function selectAt(clientX: number, clientY: number) {
+    const rect = canvas!.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
@@ -389,7 +443,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     if (hit) onSelectDate(hit.object.userData.date);
   }
 
-  let dragPointerId = null;
+  let dragPointerId: number | null = null;
   let dragStartClientX = 0;
   let dragStartClientY = 0;
   let dragStartPanX = 0;
@@ -397,17 +451,17 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   let dragMoved = 0;
   let pxPerWorldUnit = 1;
 
-  function handlePointerDown(event) {
+  function handlePointerDown(event: PointerEvent) {
     dragPointerId = event.pointerId;
     dragStartClientX = event.clientX;
     dragStartClientY = event.clientY;
     dragStartPanX = panX;
     dragStartPanY = panY;
     dragMoved = 0;
-    canvas.setPointerCapture(event.pointerId);
+    canvas!.setPointerCapture(event.pointerId);
   }
 
-  function handlePointerMove(event) {
+  function handlePointerMove(event: PointerEvent) {
     if (dragPointerId === null) {
       // No pointer captured — this is a hover move (mouse only; touch
       // never fires pointermove without an active/dragging pointer).
@@ -426,7 +480,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     applyCamera();
   }
 
-  function handlePointerUp(event) {
+  function handlePointerUp(event: PointerEvent) {
     if (event.pointerId !== dragPointerId) return;
     dragPointerId = null;
     if (dragMoved < DRAG_THRESHOLD_PX) {
@@ -443,9 +497,9 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   // so arrow-key focus movement + an aria-live announcement (via `announce`,
   // owned by main.js) stand in for what would otherwise be a focusable grid
   // of real elements.
-  let focusedCell = null;
+  let focusedCell: CellRef | null = null;
 
-  function defaultFocusCell() {
+  function defaultFocusCell(): CellRef {
     const now = new Date();
     if (year === now.getFullYear()) {
       const row = months.indexOf(now.getMonth());
@@ -456,7 +510,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
 
   function announceFocused() {
     if (!focusedCell) return;
-    const mesh = cellMeshByKey.get(cellKey(focusedCell));
+    const mesh = cellMeshByKey.get(cellKey(focusedCell)!);
     if (!mesh) return;
     let text = `${DATE_FORMAT.format(mesh.userData.date)}. ${mesh.userData.phaseName}. ${mesh.userData.illuminatedPercent}% illuminated.`;
     if (mesh.userData.isNewMoon) text += " New moon.";
@@ -464,14 +518,14 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     announce?.(text);
   }
 
-  function moveFocus(deltaCol, deltaRow) {
+  function moveFocus(deltaCol: number, deltaRow: number) {
     const current = focusedCell || defaultFocusCell();
     // deltaCol/deltaRow are screen-space (Right/Down = +1); translate
     // through the current orientation so arrow keys match what's on screen.
     let day = current.day + (transposed ? deltaRow : deltaCol);
     let row = current.row + (transposed ? deltaCol : deltaRow);
     row = Math.min(rows - 1, Math.max(0, row));
-    const maxDay = daysInMonth(year, months[row]);
+    const maxDay = daysInMonth(year, months[row]!);
     day = Math.min(maxDay, Math.max(1, day));
     focusedCell = { day, row };
     setActiveCell(focusedCell);
@@ -479,7 +533,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
     announceFocused();
   }
 
-  function handleKeyDown(event) {
+  function handleKeyDown(event: KeyboardEvent) {
     switch (event.key) {
       case "ArrowLeft":
         moveFocus(-1, 0);
@@ -499,7 +553,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
         break;
       case "Enter":
       case " ": {
-        const mesh = focusedCell && cellMeshByKey.get(cellKey(focusedCell));
+        const mesh = focusedCell && cellMeshByKey.get(cellKey(focusedCell)!);
         if (mesh) onSelectDate(mesh.userData.date);
         event.preventDefault();
         break;
@@ -520,7 +574,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
   }
 
   return {
-    mount(container, renderer) {
+    mount(_container, renderer) {
       canvas = renderer.domElement;
       canvas.addEventListener("pointerdown", handlePointerDown);
       canvas.addEventListener("pointermove", handlePointerMove);
@@ -595,7 +649,7 @@ export function createMoonGridView({ year, months, onSelectDate, announce, showR
 
     // Called by main.js when the user flips the rings toggle while this
     // grid is already mounted — updates in place, no rebuild needed.
-    setRingsVisible(visible) {
+    setRingsVisible(visible: boolean) {
       for (const { sprite } of ringSprites) sprite.visible = visible;
     },
 

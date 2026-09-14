@@ -1,8 +1,10 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { computeMoonState, getPhaseName, azimuthToCompass } from "./astronomy.js";
+import type { MoonState } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
 import { sunDirFromPhase } from "./moon-shader.js";
+import type { LocationState, ViewInstance } from "./types.js";
 
 const BASE_ROTATION_Y = Math.PI * 1.54;
 const BASE_ROTATION_X = Math.PI * 0.02;
@@ -28,7 +30,7 @@ const FOV_FIT_MARGIN = 1.15;
 // the default, non-zoomed camera distance. Widen the FOV just enough to
 // keep the Moon fully in frame at that default distance; zooming itself is
 // unaffected since it changes camera distance, not FOV.
-function computeFov(aspect) {
+function computeFov(aspect: number): number {
   if (aspect >= 1) return DEFAULT_FOV;
   const halfVFovRad = THREE.MathUtils.degToRad(DEFAULT_FOV / 2);
   const currentHalfHFovRad = Math.atan(Math.tan(halfVFovRad) * aspect);
@@ -45,6 +47,15 @@ const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
 });
 const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
+export interface MoonDetailViewOptions {
+  date: Date | null;
+  location: LocationState;
+  live: boolean;
+  onBack: (() => void) | null;
+  onRequestLocation?: () => void;
+  announce?: (text: string) => void;
+}
+
 // The single "moon as seen from here" 3D view. `live: true` (the "Today" nav
 // entry) recomputes from the real clock every 30s; otherwise it's a static
 // snapshot at local noon on `date`, reached by clicking a calendar cell.
@@ -55,7 +66,14 @@ const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute
 // main.js) is only called when the user clicks the "Use my location" button,
 // and views read location.coords/status fresh on every refresh() call, so
 // a later grant still takes effect via refreshLocation().
-export function createMoonDetailView({ date, location, live, onBack, onRequestLocation, announce }) {
+export function createMoonDetailView({
+  date,
+  location,
+  live,
+  onBack,
+  onRequestLocation,
+  announce,
+}: MoonDetailViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 0.1, 1000);
   camera.position.copy(DEFAULT_CAMERA_POSITION);
@@ -102,41 +120,42 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
   hemiLight.groundColor.setHSL(0.095, 1, 0.75);
   scene.add(hemiLight);
 
-  let controls = null;
-  let moonState = null;
-  let intervalId = null;
-  let root = null;
-  let hud = null;
-  let label = null;
-  let backButton = null;
-  let resetButton = null;
-  let locationButton = null;
+  let controls: OrbitControls | null = null;
+  let moonState: MoonState | null = null;
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  let root: HTMLElement | null = null;
+  let hud: HTMLDivElement | null = null;
+  let label: HTMLDivElement | null = null;
+  let backButton: HTMLButtonElement | null = null;
+  let resetButton: HTMLButtonElement | null = null;
+  let locationButton: HTMLButtonElement | null = null;
 
-  function applyMoonState(state) {
+  function applyMoonState(state: MoonState) {
     moonState = state;
     const sunDir = sunDirFromPhase(state.phase);
     sunLight.position.copy(sunDir).multiplyScalar(100);
   }
 
   function refresh() {
-    const at = live ? new Date() : date;
+    const at = live ? new Date() : date!;
     applyMoonState(computeMoonState(at, location.coords));
+    const current = moonState!;
 
-    const phaseLine = `${getPhaseName(moonState.phase)} · ${moonState.illuminatedPercent}% illuminated`;
+    const phaseLine = `${getPhaseName(current.phase)} · ${current.illuminatedPercent}% illuminated`;
     const lines = [phaseLine];
-    if (moonState.horizon) {
-      const alt = moonState.horizon.altitude;
+    if (current.horizon) {
+      const alt = current.horizon.altitude;
       const when = live ? "now" : "at noon";
       lines.push(
         alt > 0
-          ? `${alt.toFixed(0)}° above ${azimuthToCompass(moonState.horizon.azimuth)} horizon ${when}`
+          ? `${alt.toFixed(0)}° above ${azimuthToCompass(current.horizon.azimuth)} horizon ${when}`
           : `below horizon ${when}`
       );
-      if (moonState.moonrise || moonState.moonset) {
+      if (current.moonrise || current.moonset) {
         // ↑/↓ rather than "Moonrise"/"Moonset" — same info, far less width,
         // which matters a lot once this is stacked 3 lines deep on a phone.
-        const rise = moonState.moonrise ? `↑ ${TIME_FORMAT.format(moonState.moonrise)}` : "no rise today";
-        const set = moonState.moonset ? `↓ ${TIME_FORMAT.format(moonState.moonset)}` : "no set today";
+        const rise = current.moonrise ? `↑ ${TIME_FORMAT.format(current.moonrise)}` : "no rise today";
+        const set = current.moonset ? `↓ ${TIME_FORMAT.format(current.moonset)}` : "no set today";
         lines.push(`${rise} · ${set}`);
       }
     } else if (location.status === "denied") {
@@ -144,15 +163,15 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
     } else if (location.status === "unsupported") {
       lines.push("Location not supported on this browser");
     }
-    if (!live) lines.push(DATE_FORMAT.format(date));
+    if (!live) lines.push(DATE_FORMAT.format(date!));
     if (label) label.innerHTML = lines.join("<br>");
 
     // Live re-refreshes every 30s — only announce on an actual date change
     // (static views) or a fresh location grant, not every routine tick.
-    if (!live) announce?.(`${DATE_FORMAT.format(date)}. ${phaseLine}.`);
+    if (!live) announce?.(`${DATE_FORMAT.format(date!)}. ${phaseLine}.`);
 
     if (locationButton) {
-      const needsButton = !moonState.horizon && (location.status === "idle" || location.status === "pending");
+      const needsButton = !current.horizon && (location.status === "idle" || location.status === "pending");
       locationButton.hidden = !needsButton;
       if (needsButton) {
         locationButton.disabled = location.status === "pending";
@@ -195,7 +214,7 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
       resetButton.hidden = true;
       resetButton.addEventListener("click", () => {
         camera.position.copy(DEFAULT_CAMERA_POSITION);
-        controls.update();
+        controls!.update();
       });
       root.appendChild(resetButton);
 
@@ -213,10 +232,11 @@ export function createMoonDetailView({ date, location, live, onBack, onRequestLo
     },
 
     update() {
-      moon.rotation.y = BASE_ROTATION_Y + moonState.libLonRad;
-      moon.rotation.x = BASE_ROTATION_X + moonState.libLatRad;
-      moon.rotation.z = moonState.parallacticAngle;
-      controls.update();
+      const current = moonState!;
+      moon.rotation.y = BASE_ROTATION_Y + current.libLonRad;
+      moon.rotation.x = BASE_ROTATION_X + current.libLatRad;
+      moon.rotation.z = current.parallacticAngle;
+      controls!.update();
 
       // Covers rotation and zoom in one check — any real difference from
       // the default camera position (direction or distance) means there's

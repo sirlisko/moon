@@ -8,8 +8,9 @@ import { getColorMap, onColorMapReady } from "./textures.js";
 import { createLocationState } from "./location.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
+import type { AppState, AppView, ViewInstance } from "./types.js";
 
-const canvas = document.querySelector("#bg");
+const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
 const renderer = new THREE.WebGLRenderer({ canvas });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -41,7 +42,7 @@ liveRegion.className = "sr-only";
 liveRegion.setAttribute("role", "status");
 liveRegion.setAttribute("aria-live", "polite");
 document.body.appendChild(liveRegion);
-function announce(text) {
+function announce(text: string) {
   liveRegion.textContent = text;
 }
 
@@ -54,15 +55,15 @@ const NAV_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
 });
 
 const now = new Date();
-const state = {
-  view: "today", // "today" | "month" | "year" | "detail"
+const state: AppState = {
+  view: "today",
   year: now.getFullYear(),
   month: now.getMonth(),
   detailDate: null,
   returnTo: null,
 };
 
-let activeView = null;
+let activeView: ViewInstance | null = null;
 
 const nav = document.createElement("nav");
 nav.id = "app-nav";
@@ -78,15 +79,15 @@ nav.innerHTML = `
 `;
 document.body.appendChild(nav);
 
-const navButtons = nav.querySelectorAll("button[data-view]");
-const gridNav = nav.querySelector("#grid-nav");
-const gridLabel = nav.querySelector("#grid-label");
-const gridPrev = nav.querySelector("#grid-prev");
-const gridNext = nav.querySelector("#grid-next");
+const navButtons = nav.querySelectorAll<HTMLButtonElement>("button[data-view]");
+const gridNav = nav.querySelector<HTMLElement>("#grid-nav")!;
+const gridLabel = nav.querySelector<HTMLElement>("#grid-label")!;
+const gridPrev = nav.querySelector<HTMLButtonElement>("#grid-prev")!;
+const gridNext = nav.querySelector<HTMLButtonElement>("#grid-next")!;
 
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
-    const kind = btn.dataset.view;
+    const kind = btn.dataset.view as AppView;
     const today = new Date();
     if (kind === "month" || kind === "year") {
       state.year = today.getFullYear();
@@ -99,7 +100,7 @@ navButtons.forEach((btn) => {
 gridPrev.addEventListener("click", () => stepNav(-1));
 gridNext.addEventListener("click", () => stepNav(1));
 
-function stepNav(delta) {
+function stepNav(delta: number) {
   if (state.view === "month") {
     state.month += delta;
     if (state.month < 0) { state.month = 11; state.year -= 1; }
@@ -114,14 +115,14 @@ function stepNav(delta) {
     goToDetail(next);
     return;
   } else if (state.view === "detail") {
-    const next = new Date(state.detailDate);
+    const next = new Date(state.detailDate!);
     next.setDate(next.getDate() + delta);
     state.detailDate = next;
   }
   setView(state.view);
 }
 
-function goToDetail(date) {
+function goToDetail(date: Date) {
   state.returnTo = { view: state.view, year: state.year, month: state.month };
   state.detailDate = date;
   setView("detail");
@@ -133,7 +134,7 @@ const chrome = createChromeButtons({
   onToggleRings: (visible) => activeView?.setRingsVisible?.(visible),
 });
 
-function setView(kind) {
+function setView(kind: AppView) {
   if (activeView) {
     activeView.dispose();
     activeView = null;
@@ -174,25 +175,25 @@ function setView(kind) {
     });
   } else if (kind === "detail") {
     gridNav.hidden = false;
-    gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate);
+    gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate!);
     document.title = `${gridLabel.textContent} · Moon`;
     activeView = createMoonDetailView({
       date: state.detailDate,
       location,
       live: false,
-      onBack: () => setView(state.returnTo.view),
+      onBack: () => setView(state.returnTo!.view),
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
     });
   }
 
-  activeView.mount(viewContainer, renderer);
+  activeView!.mount(viewContainer, renderer);
   // Nav width (grid-nav shown/hidden) and the icon cluster's own width
   // (rings button shown/hidden) both just changed — re-measure and
   // reposition before the view's own resize() reads their boxes (the grid
   // uses them to keep content from scrolling underneath either element).
   chrome.layoutChromeButtons();
-  activeView.resize(window.innerWidth, window.innerHeight);
+  activeView!.resize(window.innerWidth, window.innerHeight);
   syncUrl(state);
 }
 

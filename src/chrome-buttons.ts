@@ -1,6 +1,19 @@
 const RINGS_STORAGE_KEY = "moon:showRings"; // off by default — a cleaner-looking grid — remembered across visits
 
-export function createChromeButtons({ nav, announce, onToggleRings }) {
+export interface ChromeButtonsOptions {
+  nav: HTMLElement;
+  announce?: (text: string) => void;
+  onToggleRings?: (visible: boolean) => void;
+}
+
+export interface ChromeButtons {
+  ringsButton: HTMLButtonElement;
+  layoutChromeButtons: () => void;
+  getTopInset: () => number;
+  getShowRings: () => boolean;
+}
+
+export function createChromeButtons({ nav, announce, onToggleRings }: ChromeButtonsOptions): ChromeButtons {
   let showRings = localStorage.getItem(RINGS_STORAGE_KEY) === "1";
 
   const chromeButtons = document.createElement("div");
@@ -114,7 +127,7 @@ export function createChromeButtons({ nav, announce, onToggleRings }) {
   `;
   document.body.appendChild(aboutOverlay);
 
-  const aboutCard = aboutOverlay.querySelector("#about-card");
+  const aboutCard = aboutOverlay.querySelector<HTMLElement>("#about-card")!;
   function openAbout() {
     aboutOverlay.hidden = false;
   }
@@ -122,9 +135,9 @@ export function createChromeButtons({ nav, announce, onToggleRings }) {
     aboutOverlay.hidden = true;
   }
   aboutButton.addEventListener("click", openAbout);
-  aboutOverlay.querySelector("#about-close").addEventListener("click", closeAbout);
+  aboutOverlay.querySelector("#about-close")!.addEventListener("click", closeAbout);
   aboutOverlay.addEventListener("click", (e) => {
-    if (!aboutCard.contains(e.target)) closeAbout();
+    if (!aboutCard.contains(e.target as Node)) closeAbout();
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !aboutOverlay.hidden) closeAbout();
