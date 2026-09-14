@@ -1,0 +1,415 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#bg {
+  position: fixed;
+  inset: 0;
+  display: block;
+  touch-action: none;
+}
+
+#view-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+#loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  animation: loading-pulse 1.6s ease-in-out infinite;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+#loading-overlay.loading-overlay-hidden {
+  opacity: 0;
+}
+@keyframes loading-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
+}
+
+/* Visually hidden but still readable by screen readers — used for the
+   aria-live announcement region backing the grid's keyboard navigation. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.moon-hud {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.moon-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: center;
+  pointer-events: none;
+}
+
+.back-button {
+  position: fixed;
+  top: 76px;
+  left: 24px;
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.back-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.reset-button {
+  position: fixed;
+  top: 76px;
+  right: 24px;
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.reset-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.location-button {
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.location-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.location-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+#app-nav {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 4px;
+  gap: 8px;
+  max-width: calc(100vw - 24px);
+  background: rgba(20, 20, 24, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 6px;
+  backdrop-filter: blur(8px);
+}
+
+#app-nav button {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  cursor: pointer;
+}
+#app-nav button:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+#app-nav button.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+#grid-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+}
+#grid-nav[hidden] {
+  display: none;
+}
+#grid-nav button {
+  font-family: inherit;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.65);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+#grid-nav button:hover {
+  color: #fff;
+}
+#grid-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  min-width: 9ch;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* top is set inline by layoutChromeButtons() in main.js when it would
+   otherwise overlap the nav pill; this is just the default position. */
+#chrome-buttons {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(20, 20, 24, 0.55);
+  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  backdrop-filter: blur(8px);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.icon-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+.icon-button[hidden] {
+  display: none;
+}
+.icon-button.active {
+  background: rgba(255, 176, 32, 0.18);
+  border-color: rgba(255, 176, 32, 0.4);
+  color: #ffb020;
+}
+
+#about-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+#about-overlay[hidden] {
+  display: none;
+}
+
+#about-card {
+  position: relative;
+  max-width: 480px;
+  max-height: min(80vh, 640px);
+  overflow-y: auto;
+  background: rgba(20, 20, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 28px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 14px;
+  line-height: 1.6;
+}
+#about-card h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  color: #fff;
+}
+#about-card h3 {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+#about-card p {
+  margin: 0;
+}
+#about-card .about-byline {
+  margin-top: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+#about-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+#about-card li {
+  margin-bottom: 8px;
+}
+#about-card a {
+  color: #ffb020;
+}
+#about-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+#about-close:hover {
+  color: #fff;
+}
+
+@media (max-width: 480px) {
+  #app-nav {
+    top: 16px;
+    gap: 4px;
+    padding: 5px;
+  }
+  #app-nav button {
+    padding: 6px 11px;
+    font-size: 12px;
+  }
+  #grid-nav {
+    flex-basis: 100%;
+    justify-content: center;
+    margin-left: 0;
+    padding-left: 0;
+    padding-top: 5px;
+    margin-top: 3px;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  #grid-label {
+    font-size: 12px;
+    min-width: 7ch;
+  }
+  .back-button,
+  .reset-button {
+    top: 100px;
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+  .back-button {
+    left: 16px;
+  }
+  .reset-button {
+    right: 16px;
+  }
+  .moon-hud {
+    bottom: 16px;
+    max-width: calc(100vw - 32px);
+  }
+  .moon-label {
+    font-size: 12px;
+  }
+  #chrome-buttons {
+    top: 16px;
+    right: 16px;
+    gap: 6px;
+  }
+  .icon-button {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+  #about-card {
+    padding: 22px;
+    font-size: 13px;
+  }
+}
+
+/* The 480px breakpoint's sizing is marginal on genuinely small phones (an
+   iPhone SE-class 320px-wide screen) — "Today"/"Month"/"Year" can overflow
+   by just a few px and tear "Year" onto its own orphaned line. Shrink
+   further rather than let that happen. */
+@media (max-width: 370px) {
+  #app-nav {
+    gap: 2px;
+    padding: 4px;
+  }
+  #app-nav button {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+  #grid-label {
+    font-size: 11px;
+    min-width: 0;
+  }
+  .moon-label {
+    font-size: 11px;
+  }
+}
+
