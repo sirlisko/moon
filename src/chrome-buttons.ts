@@ -1,3 +1,6 @@
+import { icon } from "./icons.js";
+import type { IconName } from "./icons.js";
+
 const RINGS_STORAGE_KEY = "moon:showRings"; // off by default — a cleaner-looking grid — remembered across visits
 const CALENDAR_STORAGE_KEY = "moon:calendarMode"; // on by default — remembered across visits, opt-out via the toggle
 
@@ -46,13 +49,13 @@ export function createChromeButtons({
   const aboutButton = document.createElement("button");
   aboutButton.id = "about-button";
   aboutButton.className = "icon-button";
-  aboutButton.textContent = "ⓘ";
+  aboutButton.innerHTML = icon("info");
   aboutButton.title = "About this app";
   aboutButton.setAttribute("aria-label", "About this app");
   chromeButtons.appendChild(aboutButton);
 
   // Hint text describes what clicking will *do* (show vs. hide), not just
-  // what the button is — the glyph alone doesn't say what it controls.
+  // what the button is — the icon alone doesn't say what it controls.
   function ringsHint() {
     return showRings ? "Hide new/full moon markers" : "Show new/full moon markers";
   }
@@ -60,7 +63,7 @@ export function createChromeButtons({
   const ringsButton = document.createElement("button");
   ringsButton.id = "rings-button";
   ringsButton.className = "icon-button";
-  ringsButton.textContent = "○";
+  ringsButton.innerHTML = icon("halo");
   ringsButton.title = ringsHint();
   ringsButton.setAttribute("aria-label", ringsHint());
   ringsButton.setAttribute("aria-pressed", String(showRings));
@@ -88,7 +91,7 @@ export function createChromeButtons({
   const calendarModeButton = document.createElement("button");
   calendarModeButton.id = "calendar-mode-button";
   calendarModeButton.className = "icon-button";
-  calendarModeButton.textContent = "▦";
+  calendarModeButton.innerHTML = icon("grid");
   calendarModeButton.title = calendarModeHint();
   calendarModeButton.setAttribute("aria-label", calendarModeHint());
   calendarModeButton.setAttribute("aria-pressed", String(calendarMode));
@@ -109,7 +112,7 @@ export function createChromeButtons({
   const shareButton = document.createElement("button");
   shareButton.id = "share-button";
   shareButton.className = "icon-button";
-  shareButton.textContent = "🔗";
+  shareButton.innerHTML = icon("link");
   shareButton.title = "Copy link to this view";
   shareButton.setAttribute("aria-label", "Copy link to this view");
   chromeButtons.appendChild(shareButton);
@@ -138,8 +141,8 @@ export function createChromeButtons({
     }
   }
 
-  function setShareState(glyph: string, label: string) {
-    shareButton.textContent = glyph;
+  function setShareState(name: IconName, label: string) {
+    shareButton.innerHTML = icon(name);
     shareButton.title = label;
     shareButton.setAttribute("aria-label", label);
   }
@@ -148,14 +151,14 @@ export function createChromeButtons({
   shareButton.addEventListener("click", async () => {
     const copied = await copyLink();
     if (copied) {
-      setShareState("✓", "Link copied");
+      setShareState("check", "Link copied");
       announce?.("Link copied to clipboard.");
     } else {
-      setShareState("✕", "Couldn't copy — the link is in your address bar");
+      setShareState("close", "Couldn't copy — the link is in your address bar");
       announce?.("Couldn't copy the link. It's in your address bar.");
     }
     if (shareResetTimer) clearTimeout(shareResetTimer);
-    shareResetTimer = setTimeout(() => setShareState("🔗", "Copy link to this view"), 2200);
+    shareResetTimer = setTimeout(() => setShareState("link", "Copy link to this view"), 2200);
   });
 
   const aboutOverlay = document.createElement("div");
@@ -163,7 +166,7 @@ export function createChromeButtons({
   aboutOverlay.hidden = true;
   aboutOverlay.innerHTML = `
     <div id="about-card" role="dialog" aria-modal="true" aria-label="About this app" tabindex="-1">
-      <button id="about-close" aria-label="Close">×</button>
+      <button id="about-close" aria-label="Close">${icon("close")}</button>
       <h2>About this moon</h2>
       <p>
         A live 3D model of the Moon, showing its real phase and position

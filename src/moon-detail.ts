@@ -4,6 +4,7 @@ import { computeMoonState, getPhaseName, azimuthToCompass } from "./astronomy.js
 import type { MoonState } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
 import { sunDirFromPhase, earthshineFromPhase, earthshineColor, SUN_INTENSITY } from "./moon-shader.js";
+import { setIconLabel } from "./icons.js";
 import { createSkyCompass } from "./sky-compass.js";
 import type { SkyCompass } from "./sky-compass.js";
 import type { OrientationState } from "./orientation.js";
@@ -494,12 +495,11 @@ export function createMoonDetailView({
       locationButton.hidden = !needsButton;
       if (needsButton) {
         locationButton.disabled = location.status === "pending";
-        locationButton.textContent =
-          location.status === "pending"
-            ? "Locating…"
-            : location.status === "denied"
-              ? "📍 Try again"
-              : "📍 Use my location";
+        if (location.status === "pending") {
+          setIconLabel(locationButton, null, "Locating…");
+        } else {
+          setIconLabel(locationButton, "pin", location.status === "denied" ? "Try again" : "Use my location");
+        }
       }
     }
 

@@ -164,6 +164,9 @@ button {
 
 .location-button {
   pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.25);
@@ -178,6 +181,16 @@ button {
 .location-button:disabled {
   cursor: default;
   opacity: 0.6;
+}
+/* `display` above would otherwise beat the UA's `[hidden] { display: none }`,
+   and both this and the compass toggle spend most of their life hidden. */
+.location-button[hidden] {
+  display: none;
+}
+.location-button svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
 }
 
 /* The "point me at the Moon" viewfinder — see sky-compass.js. */
@@ -569,6 +582,12 @@ button {
 .icon-button[hidden] {
   display: none;
 }
+/* Sized in `em` so the small-screen font-size steps below shrink the icons
+   with the buttons, the way the glyphs they replaced did. */
+.icon-button svg {
+  width: 1.125em;
+  height: 1.125em;
+}
 .icon-button.active {
   background: rgba(255, 176, 32, 0.18);
   border-color: rgba(255, 176, 32, 0.4);
@@ -655,6 +674,11 @@ button {
   line-height: 1;
   cursor: pointer;
   padding: 4px;
+}
+#about-close svg {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 #about-close:hover {
   color: #fff;
