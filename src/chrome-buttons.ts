@@ -178,6 +178,7 @@ export function createChromeButtons({
         <li>The phase, brightness, and slight wobble of the Moon (called libration) come from real astronomy data, not a rough guess.</li>
         <li>If you share your location, the Moon also tilts to match what you would really see looking up, and the app shows how high it is and which direction to look.</li>
         <li>Each day in the calendar uses the same math, checked at noon that day. Click a day to see it up close.</li>
+        <li>On a phone, "Point me at the Moon" uses the built-in compass to show which way to turn and how far to look up. Phone compasses read magnetic north and are only accurate to about ten degrees, so treat it as a nudge in the right direction rather than a precise sight.</li>
         <li>Your location stays in your browser. It is never sent anywhere.</li>
       </ul>
       <h3>Credits</h3>

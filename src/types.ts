@@ -36,4 +36,5 @@ export interface ViewInstance {
   dispose(): void;
   setRingsVisible?(visible: boolean): void;
   refreshLocation?(): void;
+  refreshOrientation?(): void;
 }

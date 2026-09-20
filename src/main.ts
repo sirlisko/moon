@@ -6,6 +6,7 @@ import { createMoonDetailView } from "./moon-detail.js";
 import { createMoonGridView } from "./moon-grid.js";
 import { getColorMap, onColorMapReady } from "./textures.js";
 import { createLocationState } from "./location.js";
+import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
 import { createDatePicker } from "./date-picker.js";
@@ -49,6 +50,7 @@ function announce(text: string) {
 }
 
 const { location, requestLocation } = createLocationState();
+const { orientation, requestOrientation, stopOrientation } = createOrientationState();
 
 const NAV_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -225,6 +227,9 @@ function setView(kind: AppView) {
       live: true,
       onBack: null,
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
+      orientation,
+      onRequestOrientation: () => requestOrientation(() => activeView?.refreshOrientation?.()),
+      onStopOrientation: stopOrientation,
       announce,
       getTopInset: chrome.getTopInset,
     });

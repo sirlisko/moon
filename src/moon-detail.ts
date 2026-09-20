@@ -4,6 +4,9 @@ import { computeMoonState, getPhaseName, azimuthToCompass } from "./astronomy.js
 import type { MoonState } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
 import { sunDirFromPhase } from "./moon-shader.js";
+import { createSkyCompass } from "./sky-compass.js";
+import type { SkyCompass } from "./sky-compass.js";
+import type { OrientationState } from "./orientation.js";
 import type { LocationState, ViewInstance } from "./types.js";
 
 const BASE_ROTATION_Y = Math.PI * 1.54;
@@ -55,6 +58,11 @@ export interface MoonDetailViewOptions {
   // Names where onBack actually goes (worded by main.js); unused without it.
   backLabel?: string;
   onRequestLocation?: () => void;
+  // Wired like `location` above, and live-only: aiming a phone at where the
+  // Moon stood at noon on some other date would be pointing at nothing.
+  orientation?: OrientationState;
+  onRequestOrientation?: () => void;
+  onStopOrientation?: () => void;
   announce?: (text: string) => void;
   // Live pixel measurement (from chrome-buttons.js) of the safe top offset
   // below the nav pill and icon cluster — both back-button and reset-button
@@ -82,6 +90,9 @@ export function createMoonDetailView({
   onBack,
   backLabel = "← Back",
   onRequestLocation,
+  orientation,
+  onRequestOrientation,
+  onStopOrientation,
   announce,
   getTopInset,
 }: MoonDetailViewOptions): ViewInstance {
@@ -140,6 +151,7 @@ export function createMoonDetailView({
   let backButton: HTMLButtonElement | null = null;
   let resetButton: HTMLButtonElement | null = null;
   let locationButton: HTMLButtonElement | null = null;
+  let compass: SkyCompass | null = null;
 
   // Keeps back/reset from colliding with the icon cluster when it's been
   // pushed below the nav (see the comment on getTopInset above) — a no-op
@@ -229,6 +241,10 @@ export function createMoonDetailView({
               : "📍 Use my location";
       }
     }
+
+    // The compass needs a sky position to aim at — the same condition that
+    // produced `horizon` above.
+    compass?.setAvailable(Boolean(current.horizon));
   }
 
   return {
@@ -246,6 +262,17 @@ export function createMoonDetailView({
       locationButton.hidden = true;
       locationButton.addEventListener("click", () => onRequestLocation?.());
       hud.appendChild(locationButton);
+
+      if (live && orientation) {
+        compass = createSkyCompass({
+          orientation,
+          onRequest: () => onRequestOrientation?.(),
+          onStop: () => onStopOrientation?.(),
+          announce,
+        });
+        hud.appendChild(compass.panel);
+        hud.appendChild(compass.button);
+      }
 
       label = document.createElement("div");
       label.className = "moon-label";
@@ -296,6 +323,14 @@ export function createMoonDetailView({
       // something for "Reset view" to reset.
       const moved = camera.position.distanceTo(DEFAULT_CAMERA_POSITION) > 0.01;
       if (resetButton) resetButton.hidden = !moved;
+
+      // Redrawn per frame; the Moon's own position moves about a quarter of
+      // a degree per minute, which the 30s refresh covers.
+      compass?.update(
+        current.horizon
+          ? { azimuth: current.horizon.azimuth, altitude: current.horizon.altitude }
+          : null
+      );
     },
 
     render(renderer) {
@@ -313,10 +348,14 @@ export function createMoonDetailView({
     // mounted — recomputes with the now-available coordinates.
     refreshLocation: refresh,
 
+    // Called by main.js when the motion-permission prompt is answered.
+    refreshOrientation: () => compass?.syncStatus(),
+
     dispose() {
       stopTicking();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (controls) controls.dispose();
+      compass?.dispose();
       if (hud) hud.remove();
       if (backButton) backButton.remove();
       if (resetButton) resetButton.remove();

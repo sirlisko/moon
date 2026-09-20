@@ -180,6 +180,111 @@ button {
   opacity: 0.6;
 }
 
+/* The "point me at the Moon" viewfinder — see sky-compass.js. */
+.sky-compass {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.sky-compass[hidden] {
+  display: none;
+}
+
+.sky-compass-ring {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(20, 20, 24, 0.45);
+  backdrop-filter: blur(8px);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+/* Same pale moonlight treatment as the new/full moon toggle, rather than the
+   app's amber accent — this lights up *because of* the Moon. */
+.sky-compass-ring.is-aligned {
+  border-color: rgba(255, 250, 227, 0.7);
+  box-shadow: 0 0 16px rgba(255, 247, 214, 0.35);
+}
+
+/* Below the horizon the vertical axis carries no meaning, so the dial says
+   so: a horizon line through the centre, and no "you found it" glow for
+   something that can't be seen. */
+.sky-compass-ring.is-bearing-only::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.15);
+}
+.sky-compass-ring.is-bearing-only.is-aligned {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: none;
+}
+
+.sky-compass-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+}
+
+/* Positioned by an inline transform from the dial centre (place() in
+   sky-compass.js); left/top only set that origin. */
+.sky-compass-marker,
+.sky-compass-north {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  line-height: 1;
+  transition: opacity 0.2s ease;
+}
+.sky-compass-marker {
+  font-size: 22px;
+}
+.sky-compass-north {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.45);
+}
+/* Pinned to the rim, so dimmed — it isn't really there. */
+.sky-compass-marker.is-beyond-rim,
+.sky-compass-north.is-beyond-rim {
+  opacity: 0.45;
+}
+
+.sky-compass-hint {
+  min-height: 16px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+/* Phone magnetometers are good to roughly a compass point, not a pixel. */
+.sky-compass-caveat {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-compass-ring,
+  .sky-compass-marker,
+  .sky-compass-north {
+    transition: none;
+  }
+}
+
 #app-nav {
   position: fixed;
   top: max(20px, env(safe-area-inset-top));
@@ -591,6 +696,10 @@ button {
   }
   .moon-label {
     font-size: 12px;
+  }
+  .sky-compass-ring {
+    width: 136px;
+    height: 136px;
   }
   #chrome-buttons {
     top: max(16px, env(safe-area-inset-top));
