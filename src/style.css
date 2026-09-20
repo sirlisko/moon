@@ -29,15 +29,23 @@ body {
   touch-action: none;
 }
 
-/* iOS Safari still honors its double-tap-to-zoom gesture on chrome UI even
-   with `user-scalable=no` in the viewport meta tag — that meta tag only
-   blocks pinch-zoom. `touch-action: manipulation` on the tappable chrome
-   (not #bg, which needs its own pan/pinch handling for OrbitControls and
-   grid drag-to-pan) tells the browser only panning/single-tap gestures are
-   meaningful here, which suppresses the double-tap zoom without disabling
-   anything else. */
+/* Pinch-zoom stays enabled in the viewport meta tag (a `user-scalable=no`
+   there would fail WCAG 1.4.4); `touch-action` separates the app's gestures
+   from the browser's instead — `none` on #bg for OrbitControls and
+   drag-to-pan, `manipulation` here to suppress iOS double-tap-to-zoom. */
 button {
   touch-action: manipulation;
+}
+
+/* One focus style for the whole app; the browser default is a thin blue
+   line, near-invisible on this background. */
+:focus-visible {
+  outline: 2px solid rgba(255, 176, 32, 0.9);
+  outline-offset: 2px;
+}
+#bg:focus-visible {
+  /* The grid canvas is full-bleed; an offset ring would sit off-screen. */
+  outline-offset: -3px;
 }
 
 #view-overlay {
@@ -71,6 +79,17 @@ button {
   50% { opacity: 0.9; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  #loading-overlay {
+    animation: none;
+    opacity: 0.7;
+  }
+  #loading-overlay,
+  .grid-hint {
+    transition: none;
+  }
+}
+
 /* Visually hidden but still readable by screen readers — used for the
    aria-live announcement region backing the grid's keyboard navigation. */
 .sr-only {
@@ -87,7 +106,9 @@ button {
 
 .moon-hud {
   position: fixed;
-  bottom: 24px;
+  /* max() clears the iOS home indicator and falls back to the plain value
+     wherever env() resolves to 0. Same pattern on the fixed chrome below. */
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 8px));
   left: 50%;
   transform: translateX(-50%);
   z-index: 5;
@@ -110,7 +131,7 @@ button {
 .back-button {
   position: fixed;
   top: 76px;
-  left: 24px;
+  left: max(24px, calc(env(safe-area-inset-left) + 8px));
   pointer-events: auto;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.85);
@@ -127,7 +148,7 @@ button {
 .reset-button {
   position: fixed;
   top: 76px;
-  right: 24px;
+  right: max(24px, calc(env(safe-area-inset-right) + 8px));
   pointer-events: auto;
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.85);
@@ -159,9 +180,114 @@ button {
   opacity: 0.6;
 }
 
+/* The "point me at the Moon" viewfinder — see sky-compass.js. */
+.sky-compass {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.sky-compass[hidden] {
+  display: none;
+}
+
+.sky-compass-ring {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(20, 20, 24, 0.45);
+  backdrop-filter: blur(8px);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+/* Same pale moonlight treatment as the new/full moon toggle, rather than the
+   app's amber accent — this lights up *because of* the Moon. */
+.sky-compass-ring.is-aligned {
+  border-color: rgba(255, 250, 227, 0.7);
+  box-shadow: 0 0 16px rgba(255, 247, 214, 0.35);
+}
+
+/* Below the horizon the vertical axis carries no meaning, so the dial says
+   so: a horizon line through the centre, and no "you found it" glow for
+   something that can't be seen. */
+.sky-compass-ring.is-bearing-only::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 12%;
+  right: 12%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.15);
+}
+.sky-compass-ring.is-bearing-only.is-aligned {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: none;
+}
+
+.sky-compass-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+}
+
+/* Positioned by an inline transform from the dial centre (place() in
+   sky-compass.js); left/top only set that origin. */
+.sky-compass-marker,
+.sky-compass-north {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  line-height: 1;
+  transition: opacity 0.2s ease;
+}
+.sky-compass-marker {
+  font-size: 22px;
+}
+.sky-compass-north {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.45);
+}
+/* Pinned to the rim, so dimmed — it isn't really there. */
+.sky-compass-marker.is-beyond-rim,
+.sky-compass-north.is-beyond-rim {
+  opacity: 0.45;
+}
+
+.sky-compass-hint {
+  min-height: 16px;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+/* Phone magnetometers are good to roughly a compass point, not a pixel. */
+.sky-compass-caveat {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-compass-ring,
+  .sky-compass-marker,
+  .sky-compass-north {
+    transition: none;
+  }
+}
+
 #app-nav {
   position: fixed;
-  top: 20px;
+  top: max(20px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
@@ -238,6 +364,10 @@ button {
 #grid-label:hover {
   color: #fff;
   background: rgba(255, 255, 255, 0.12);
+}
+#grid-label.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
 }
 /* Hints there's a picker behind the label without stealing its
    accessible name / breaking exact-text assertions in tests. */
@@ -316,6 +446,7 @@ button {
   gap: 4px;
 }
 .date-picker-cell {
+  position: relative;
   font-family: inherit;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.75);
@@ -339,8 +470,18 @@ button {
 .date-picker-cell-outside {
   color: rgba(255, 255, 255, 0.25);
 }
-.date-picker-cell.is-today {
-  border-color: rgba(255, 176, 32, 0.5);
+/* A dot rather than a border — today and the selected day are often the
+   same cell, and two amber outlines read as one. */
+.date-picker-cell.is-today::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: #ffb020;
 }
 .date-picker-cell.is-selected {
   background: rgba(255, 176, 32, 0.18);
@@ -368,12 +509,37 @@ button {
   display: none;
 }
 
+/* Shown once by moon-grid.js when a grid overflows the viewport — a cropped
+   WebGL canvas gives no other sign that it can be panned. */
+.grid-hint {
+  position: fixed;
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 8px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  pointer-events: none;
+  background: rgba(20, 20, 24, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 7px 16px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  transition: opacity 0.4s ease;
+}
+.grid-hint-hidden {
+  opacity: 0;
+}
+
 /* top is set inline by layoutChromeButtons() in main.js when it would
    otherwise overlap the nav pill; this is just the default position. */
 #chrome-buttons {
   position: fixed;
-  top: 20px;
-  right: 20px;
+  top: max(20px, env(safe-area-inset-top));
+  right: max(20px, calc(env(safe-area-inset-right) + 8px));
   z-index: 10;
   display: flex;
   gap: 8px;
@@ -496,7 +662,7 @@ button {
 
 @media (max-width: 480px) {
   #app-nav {
-    top: 16px;
+    top: max(16px, env(safe-area-inset-top));
     gap: 4px;
     padding: 5px;
   }
@@ -519,21 +685,25 @@ button {
     font-size: 12px;
   }
   .back-button {
-    left: 16px;
+    left: max(16px, calc(env(safe-area-inset-left) + 8px));
   }
   .reset-button {
-    right: 16px;
+    right: max(16px, calc(env(safe-area-inset-right) + 8px));
   }
   .moon-hud {
-    bottom: 16px;
+    bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px));
     max-width: calc(100vw - 32px);
   }
   .moon-label {
     font-size: 12px;
   }
+  .sky-compass-ring {
+    width: 136px;
+    height: 136px;
+  }
   #chrome-buttons {
-    top: 16px;
-    right: 16px;
+    top: max(16px, env(safe-area-inset-top));
+    right: max(16px, calc(env(safe-area-inset-right) + 8px));
     gap: 6px;
   }
   .icon-button {

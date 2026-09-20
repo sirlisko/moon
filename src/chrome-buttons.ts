@@ -114,30 +114,55 @@ export function createChromeButtons({
   shareButton.setAttribute("aria-label", "Copy link to this view");
   chromeButtons.appendChild(shareButton);
 
-  shareButton.addEventListener("click", async () => {
+  // The async Clipboard API is unavailable over plain http and can be
+  // blocked by permissions policy — hence the legacy fallback.
+  async function copyLink(): Promise<boolean> {
+    const url = window.location.href;
     try {
-      await navigator.clipboard.writeText(window.location.href);
-      shareButton.textContent = "✓";
-      shareButton.title = "Link copied";
-      shareButton.setAttribute("aria-label", "Link copied");
-      announce?.("Link copied to clipboard.");
+      await navigator.clipboard.writeText(url);
+      return true;
+    } catch { /* fall through */ }
+    try {
+      const scratch = document.createElement("textarea");
+      scratch.value = url;
+      scratch.setAttribute("readonly", "");
+      scratch.style.position = "fixed";
+      scratch.style.opacity = "0";
+      document.body.appendChild(scratch);
+      scratch.select();
+      const copied = document.execCommand("copy");
+      scratch.remove();
+      return copied;
     } catch {
-      // Clipboard API unavailable/denied — the address bar is still
-      // shareable either way, so just leave the button as-is.
-    } finally {
-      setTimeout(() => {
-        shareButton.textContent = "🔗";
-        shareButton.title = "Copy link to this view";
-        shareButton.setAttribute("aria-label", "Copy link to this view");
-      }, 1500);
+      return false;
     }
+  }
+
+  function setShareState(glyph: string, label: string) {
+    shareButton.textContent = glyph;
+    shareButton.title = label;
+    shareButton.setAttribute("aria-label", label);
+  }
+
+  let shareResetTimer: ReturnType<typeof setTimeout> | null = null;
+  shareButton.addEventListener("click", async () => {
+    const copied = await copyLink();
+    if (copied) {
+      setShareState("✓", "Link copied");
+      announce?.("Link copied to clipboard.");
+    } else {
+      setShareState("✕", "Couldn't copy — the link is in your address bar");
+      announce?.("Couldn't copy the link. It's in your address bar.");
+    }
+    if (shareResetTimer) clearTimeout(shareResetTimer);
+    shareResetTimer = setTimeout(() => setShareState("🔗", "Copy link to this view"), 2200);
   });
 
   const aboutOverlay = document.createElement("div");
   aboutOverlay.id = "about-overlay";
   aboutOverlay.hidden = true;
   aboutOverlay.innerHTML = `
-    <div id="about-card" role="dialog" aria-label="About this app">
+    <div id="about-card" role="dialog" aria-modal="true" aria-label="About this app" tabindex="-1">
       <button id="about-close" aria-label="Close">×</button>
       <h2>About this moon</h2>
       <p>
@@ -153,6 +178,7 @@ export function createChromeButtons({
         <li>The phase, brightness, and slight wobble of the Moon (called libration) come from real astronomy data, not a rough guess.</li>
         <li>If you share your location, the Moon also tilts to match what you would really see looking up, and the app shows how high it is and which direction to look.</li>
         <li>Each day in the calendar uses the same math, checked at noon that day. Click a day to see it up close.</li>
+        <li>On a phone, "Point me at the Moon" uses the built-in compass to show which way to turn and how far to look up. Phone compasses read magnetic north and are only accurate to about ten degrees, so treat it as a nudge in the right direction rather than a precise sight.</li>
         <li>Your location stays in your browser. It is never sent anywhere.</li>
       </ul>
       <h3>Credits</h3>
@@ -166,12 +192,42 @@ export function createChromeButtons({
   document.body.appendChild(aboutOverlay);
 
   const aboutCard = aboutOverlay.querySelector<HTMLElement>("#about-card")!;
+
+  let focusBeforeAbout: HTMLElement | null = null;
+
+  function aboutFocusables(): HTMLElement[] {
+    return Array.from(aboutCard.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+  }
+
   function openAbout() {
+    if (!aboutOverlay.hidden) return;
+    focusBeforeAbout = document.activeElement as HTMLElement | null;
     aboutOverlay.hidden = false;
+    aboutCard.focus();
   }
+
   function closeAbout() {
+    if (aboutOverlay.hidden) return;
     aboutOverlay.hidden = true;
+    focusBeforeAbout?.focus();
+    focusBeforeAbout = null;
   }
+
+  aboutOverlay.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const focusables = aboutFocusables();
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === aboutCard)) {
+      last.focus();
+      e.preventDefault();
+    } else if (!e.shiftKey && active === last) {
+      first.focus();
+      e.preventDefault();
+    }
+  });
   aboutButton.addEventListener("click", openAbout);
   aboutOverlay.querySelector("#about-close")!.addEventListener("click", closeAbout);
   aboutOverlay.addEventListener("click", (e) => {
