@@ -1,6 +1,8 @@
 import { angleDelta } from "./orientation.js";
 import type { OrientationState } from "./orientation.js";
 import { azimuthToCompass } from "./astronomy.js";
+import { setIconLabel } from "./icons.js";
+import type { IconName } from "./icons.js";
 
 // A heads-up viewfinder rather than a map-style compass rose: the centre of
 // the dial is wherever the back of the phone points, and the Moon marker
@@ -87,15 +89,15 @@ export function createSkyCompass({
     syncStatus();
   });
 
-  function buttonLabel(): string {
+  function buttonLabel(): [IconName | null, string] {
     // Pending outranks active: between tapping and answering the browser's
     // motion prompt the compass is switched on but has nothing to show, and
     // "Hide compass" on a disabled button reads as a bug.
-    if (orientation.status === "pending") return "Starting compass…";
-    if (orientation.active) return "Hide compass";
-    if (orientation.status === "denied") return "🧭 Motion access blocked";
-    if (orientation.status === "insecure") return "🧭 Needs a secure connection";
-    return "🧭 Point me at the Moon";
+    if (orientation.status === "pending") return [null, "Starting compass…"];
+    if (orientation.active) return [null, "Hide compass"];
+    if (orientation.status === "denied") return ["compass", "Motion access blocked"];
+    if (orientation.status === "insecure") return ["compass", "Needs a secure connection"];
+    return ["compass", "Point me at the Moon"];
   }
 
   function syncStatus() {
@@ -104,7 +106,7 @@ export function createSkyCompass({
     const dead = orientation.status === "unsupported";
     button.hidden = !available || dead;
     button.disabled = orientation.status === "pending";
-    button.textContent = buttonLabel();
+    setIconLabel(button, ...buttonLabel());
     button.setAttribute("aria-pressed", String(orientation.active));
     panel.hidden = !available || !orientation.active;
     if (panel.hidden) ring.classList.remove("is-aligned");

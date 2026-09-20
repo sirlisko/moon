@@ -1,3 +1,6 @@
+import { icon } from "./icons.js";
+import type { IconName } from "./icons.js";
+
 const RINGS_STORAGE_KEY = "moon:showRings"; // off by default — a cleaner-looking grid — remembered across visits
 const CALENDAR_STORAGE_KEY = "moon:calendarMode"; // on by default — remembered across visits, opt-out via the toggle
 
@@ -46,13 +49,13 @@ export function createChromeButtons({
   const aboutButton = document.createElement("button");
   aboutButton.id = "about-button";
   aboutButton.className = "icon-button";
-  aboutButton.textContent = "ⓘ";
+  aboutButton.innerHTML = icon("info");
   aboutButton.title = "About this app";
   aboutButton.setAttribute("aria-label", "About this app");
   chromeButtons.appendChild(aboutButton);
 
   // Hint text describes what clicking will *do* (show vs. hide), not just
-  // what the button is — the glyph alone doesn't say what it controls.
+  // what the button is — the icon alone doesn't say what it controls.
   function ringsHint() {
     return showRings ? "Hide new/full moon markers" : "Show new/full moon markers";
   }
@@ -60,7 +63,7 @@ export function createChromeButtons({
   const ringsButton = document.createElement("button");
   ringsButton.id = "rings-button";
   ringsButton.className = "icon-button";
-  ringsButton.textContent = "○";
+  ringsButton.innerHTML = icon("halo");
   ringsButton.title = ringsHint();
   ringsButton.setAttribute("aria-label", ringsHint());
   ringsButton.setAttribute("aria-pressed", String(showRings));
@@ -88,7 +91,7 @@ export function createChromeButtons({
   const calendarModeButton = document.createElement("button");
   calendarModeButton.id = "calendar-mode-button";
   calendarModeButton.className = "icon-button";
-  calendarModeButton.textContent = "▦";
+  calendarModeButton.innerHTML = icon("grid");
   calendarModeButton.title = calendarModeHint();
   calendarModeButton.setAttribute("aria-label", calendarModeHint());
   calendarModeButton.setAttribute("aria-pressed", String(calendarMode));
@@ -109,7 +112,7 @@ export function createChromeButtons({
   const shareButton = document.createElement("button");
   shareButton.id = "share-button";
   shareButton.className = "icon-button";
-  shareButton.textContent = "🔗";
+  shareButton.innerHTML = icon("link");
   shareButton.title = "Copy link to this view";
   shareButton.setAttribute("aria-label", "Copy link to this view");
   chromeButtons.appendChild(shareButton);
@@ -138,8 +141,8 @@ export function createChromeButtons({
     }
   }
 
-  function setShareState(glyph: string, label: string) {
-    shareButton.textContent = glyph;
+  function setShareState(name: IconName, label: string) {
+    shareButton.innerHTML = icon(name);
     shareButton.title = label;
     shareButton.setAttribute("aria-label", label);
   }
@@ -148,50 +151,22 @@ export function createChromeButtons({
   shareButton.addEventListener("click", async () => {
     const copied = await copyLink();
     if (copied) {
-      setShareState("✓", "Link copied");
+      setShareState("check", "Link copied");
       announce?.("Link copied to clipboard.");
     } else {
-      setShareState("✕", "Couldn't copy — the link is in your address bar");
+      setShareState("close", "Couldn't copy — the link is in your address bar");
       announce?.("Couldn't copy the link. It's in your address bar.");
     }
     if (shareResetTimer) clearTimeout(shareResetTimer);
-    shareResetTimer = setTimeout(() => setShareState("🔗", "Copy link to this view"), 2200);
+    shareResetTimer = setTimeout(() => setShareState("link", "Copy link to this view"), 2200);
   });
 
-  const aboutOverlay = document.createElement("div");
-  aboutOverlay.id = "about-overlay";
-  aboutOverlay.hidden = true;
-  aboutOverlay.innerHTML = `
-    <div id="about-card" role="dialog" aria-modal="true" aria-label="About this app" tabindex="-1">
-      <button id="about-close" aria-label="Close">×</button>
-      <h2>About this moon</h2>
-      <p>
-        A live 3D model of the Moon, showing its real phase and position
-        as seen from your location. Plus a calendar with every day's
-        moon phase, like a printed lunar calendar.
-      </p>
-      <p class="about-byline">
-        Made by <a href="https://sirlisko.com" target="_blank" rel="noopener">Luca Lischetti (sirlisko)</a>
-      </p>
-      <h3>How it works</h3>
-      <ul>
-        <li>The phase, brightness, and slight wobble of the Moon (called libration) come from real astronomy data, not a rough guess.</li>
-        <li>If you share your location, the Moon also tilts to match what you would really see looking up, and the app shows how high it is and which direction to look.</li>
-        <li>Each day in the calendar uses the same math, checked at noon that day. Click a day to see it up close.</li>
-        <li>On a phone, "Point me at the Moon" uses the built-in compass to show which way to turn and how far to look up. Phone compasses read magnetic north and are only accurate to about ten degrees, so treat it as a nudge in the right direction rather than a precise sight.</li>
-        <li>Your location stays in your browser. It is never sent anywhere.</li>
-      </ul>
-      <h3>Credits</h3>
-      <ul>
-        <li>Moon images: <a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a>. Color and height data from NASA's Lunar Reconnaissance Orbiter.</li>
-        <li>Astronomy math: <a href="https://github.com/cosinekitty/astronomy" target="_blank" rel="noopener">astronomy-engine</a> by Don Cross.</li>
-        <li>3D rendering: <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a>.</li>
-      </ul>
-    </div>
-  `;
-  document.body.appendChild(aboutOverlay);
-
+  // Markup lives in index.html rather than here: the app is a WebGL canvas,
+  // so this copy is most of the text a crawler can read on the page.
+  const aboutOverlay = document.querySelector<HTMLElement>("#about-overlay")!;
   const aboutCard = aboutOverlay.querySelector<HTMLElement>("#about-card")!;
+  const aboutCloseButton = aboutOverlay.querySelector<HTMLElement>("#about-close")!;
+  aboutCloseButton.innerHTML = icon("close");
 
   let focusBeforeAbout: HTMLElement | null = null;
 
@@ -229,7 +204,7 @@ export function createChromeButtons({
     }
   });
   aboutButton.addEventListener("click", openAbout);
-  aboutOverlay.querySelector("#about-close")!.addEventListener("click", closeAbout);
+  aboutCloseButton.addEventListener("click", closeAbout);
   aboutOverlay.addEventListener("click", (e) => {
     if (!aboutCard.contains(e.target as Node)) closeAbout();
   });

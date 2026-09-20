@@ -38,18 +38,13 @@ const LABEL_OPACITY = 0.55;
 const LABEL_HOVER_OPACITY = 1;
 const LABEL_HOVER_SCALE = 1.2;
 const LABEL_COLOR = new THREE.Color(0xffffff);
-const LABEL_HOVER_COLOR = new THREE.Color(0xffb020);
 const CELL_ACTIVE_SCALE = 1.15;
 // New/full moon ring halo, relative to the cell's own diameter. Kept small
 // and faint — a quiet hint, not a badge competing with the moon itself.
 const RING_SCALE = 1.22;
-// Sits outside RING_SCALE so a day that's both today and a new/full moon
-// shows two distinct rings.
-const TODAY_RING_SCALE = 1.42;
-// Calendar cells carry a day number in the corner that a ring around the
-// whole sphere would strike through — there the marker rings the number.
-const TODAY_NUMBER_RING_SCALE = 0.48;
-const TODAY_RING_COLOR = 0xffb020;
+// Today is marked on the labels rather than on the moon (this was a ring
+// around the cell) — see markToday.
+const TODAY_COLOR = 0xffb020;
 // Calendar mode is width-bound (7 fixed columns), so the grid can't grow to
 // fill a phone screen; the cells grow inside the same pitch instead.
 const CAL_CELL_SCALE = 1.15;
@@ -134,21 +129,6 @@ function getRingMaterial(): THREE.SpriteMaterial {
   return sharedRingMaterial;
 }
 
-// Marks the current date. Unlike the new/full rings, never toggled off.
-let sharedTodayRingMaterial: THREE.SpriteMaterial | null = null;
-function getTodayRingMaterial(): THREE.SpriteMaterial {
-  if (!sharedTodayRingMaterial) {
-    sharedTodayRingMaterial = new THREE.SpriteMaterial({
-      map: getRingTexture(),
-      transparent: true,
-      depthTest: false,
-      opacity: 0.9,
-      color: TODAY_RING_COLOR,
-    });
-  }
-  return sharedTodayRingMaterial;
-}
-
 // Rasterizes text once at a fixed resolution, solid white — dimming and
 // hover-highlighting are done live via material.opacity/color (see
 // setLabelHighlighted) rather than by re-rendering the texture. The
@@ -182,14 +162,27 @@ function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {
   return sprite;
 }
 
+// Opacity and scale only: the color is a label's own (today's number is
+// tinted, the rest are white), so a highlight that recolored it would erase
+// that marking for as long as the pointer sat on the day it marks.
 function setLabelHighlighted(sprite: THREE.Sprite | undefined, highlighted: boolean): void {
   if (!sprite) return;
   const material = sprite.material as THREE.SpriteMaterial;
-  material.opacity = highlighted ? LABEL_HOVER_OPACITY : LABEL_OPACITY;
-  material.color.copy(highlighted ? LABEL_HOVER_COLOR : LABEL_COLOR);
+  material.opacity = highlighted ? LABEL_HOVER_OPACITY : (sprite.userData.baseOpacity ?? LABEL_OPACITY);
   const base: SpriteScale = sprite.userData.currentScale || sprite.userData.baseScale;
   const boost = highlighted ? LABEL_HOVER_SCALE : 1;
   sprite.scale.set(base.x * boost, base.y * boost, 1);
+}
+
+// Full opacity as much as the tint is what makes today findable among dimmed
+// numbers; the base is stored so the hover highlight restores it rather than
+// dropping today's label back to LABEL_OPACITY on the way out.
+function markToday(sprite: THREE.Sprite | undefined): void {
+  if (!sprite) return;
+  const material = sprite.material as THREE.SpriteMaterial;
+  material.color.setHex(TODAY_COLOR);
+  material.opacity = LABEL_HOVER_OPACITY;
+  sprite.userData.baseOpacity = LABEL_HOVER_OPACITY;
 }
 
 // "Contain" fit — the whole grid visible, no cropping, letterboxed to match
@@ -286,7 +279,8 @@ export function createMoonGridView({
   const weekdayLabels: { sprite: THREE.Sprite; col: number }[] = [];
   const ringSprites: RingEntry[] = [];
   const disposables: Array<{ dispose(): void }> = [];
-  let todayMarker: RingEntry | null = null;
+  let todayDay: number | null = null;
+  let todayRow: number | null = null;
 
   const todayDate = new Date();
   function isTodayYMD(d: Date): boolean {
@@ -334,9 +328,8 @@ export function createMoonGridView({
       disposables.push(material);
 
       if (mesh.userData.isToday) {
-        const marker = new THREE.Sprite(getTodayRingMaterial());
-        scene.add(marker);
-        todayMarker = { sprite: marker, day, row };
+        todayDay = day;
+        todayRow = row;
       }
 
       if (isNewMoon || isFullMoon) {
@@ -381,6 +374,17 @@ export function createMoonGridView({
   const cellMeshByKey = new Map(cells.map((c) => [cellKey(c), c.mesh]));
   const monthLabelByRow = new Map(monthLabels.map((m) => [m.row, m.sprite]));
   const dayLabelByDay = new Map(dayLabels.map((d) => [d.day, d.sprite]));
+  // Today lives on the labels, never on the moons. A ring around the cell
+  // competed with the one thing the grid is for — a page of phases read at a
+  // glance — and in calendar mode it circled (and struck through) the day
+  // number already sitting in the corner. In line mode that number is a
+  // column header shared by every month, so the month name is tinted too and
+  // today is where the two meet.
+  if (todayDay !== null) {
+    markToday(dayLabelByDay.get(todayDay));
+    if (!isCalendar && todayRow !== null) markToday(monthLabelByRow.get(todayRow));
+  }
+
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let canvas: HTMLCanvasElement | null = null;
@@ -459,20 +463,6 @@ export function createMoonGridView({
     if (isCalendar) applyCalendarLayout();
     else applyLineLayout();
     topAligned = isCalendar || transposed;
-    if (todayMarker) {
-      const { x, y } = cellPosFor(todayMarker.day, todayMarker.row);
-      if (isCalendar) {
-        const offset = CAL_DAY_NUMBER_OFFSET * cellScale;
-        const s = CELL_RADIUS * 2 * TODAY_NUMBER_RING_SCALE * cellScale;
-        // Between the cell and the day number (z = 0.01) that sits in it.
-        todayMarker.sprite.position.set(x - offset, y + offset, 0.005);
-        todayMarker.sprite.scale.set(s, s, 1);
-      } else {
-        const s = CELL_RADIUS * 2 * TODAY_RING_SCALE * cellScale;
-        todayMarker.sprite.position.set(x, y, -0.04);
-        todayMarker.sprite.scale.set(s, s, 1);
-      }
-    }
   }
 
   function applyCalendarLayout() {

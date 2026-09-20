@@ -11,6 +11,8 @@ A live 3D model of the Moon, showing its real phase and position as seen from yo
 - **Month / Year**: a calendar grid of every day's moon. Each one is its own lit 3D sphere, not a flat icon. New and full moon days get a small ring marker (off by default, you can turn it on). Click any day, or use Tab, arrow keys, and Enter, to open it.
 - **Any date**: click a calendar day, or use the ‹ › buttons on any view, to see the Moon as it looked, or will look, on that date, from your location.
 
+<img src="docs/screenshot-compass.png" alt="Point me at the Moon, on a phone" width="320">
+
 ![A year of moons](docs/screenshot-year.png)
 
 Your location and compass readings stay in your browser. They are only used to compute the render and are never sent anywhere.
