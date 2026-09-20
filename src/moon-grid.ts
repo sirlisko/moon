@@ -43,6 +43,16 @@ const CELL_ACTIVE_SCALE = 1.15;
 // New/full moon ring halo, relative to the cell's own diameter. Kept small
 // and faint — a quiet hint, not a badge competing with the moon itself.
 const RING_SCALE = 1.22;
+// Sits outside RING_SCALE so a day that's both today and a new/full moon
+// shows two distinct rings.
+const TODAY_RING_SCALE = 1.42;
+// Calendar cells carry a day number in the corner that a ring around the
+// whole sphere would strike through — there the marker rings the number.
+const TODAY_NUMBER_RING_SCALE = 0.48;
+const TODAY_RING_COLOR = 0xffb020;
+// Calendar mode is width-bound (7 fixed columns), so the grid can't grow to
+// fill a phone screen; the cells grow inside the same pitch instead.
+const CAL_CELL_SCALE = 1.15;
 
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
 
@@ -86,11 +96,11 @@ function getCellGeometry(): THREE.SphereGeometry {
   return sharedCellGeometry;
 }
 
-// A thin ring texture marking new/full moon days — one shared material for
-// every marked cell across every grid mount, never disposed.
-let sharedRingMaterial: THREE.SpriteMaterial | null = null;
-function getRingMaterial(): THREE.SpriteMaterial {
-  if (!sharedRingMaterial) {
+// A thin ring texture shared by both marker materials, tinted per material.
+// Never disposed.
+let sharedRingTexture: THREE.CanvasTexture | null = null;
+function getRingTexture(): THREE.CanvasTexture {
+  if (!sharedRingTexture) {
     const size = 128;
     const canvas = document.createElement("canvas");
     canvas.width = size;
@@ -103,10 +113,18 @@ function getRingMaterial(): THREE.SpriteMaterial {
     ctx.arc(size / 2, size / 2, size / 2 - lineWidth, 0, Math.PI * 2);
     ctx.stroke();
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
+    sharedRingTexture = new THREE.CanvasTexture(canvas);
+    sharedRingTexture.colorSpace = THREE.SRGBColorSpace;
+  }
+  return sharedRingTexture;
+}
+
+// Marks new/full moon days. Shared across every grid mount, never disposed.
+let sharedRingMaterial: THREE.SpriteMaterial | null = null;
+function getRingMaterial(): THREE.SpriteMaterial {
+  if (!sharedRingMaterial) {
     sharedRingMaterial = new THREE.SpriteMaterial({
-      map: texture,
+      map: getRingTexture(),
       transparent: true,
       depthTest: false,
       opacity: 0.32,
@@ -114,6 +132,21 @@ function getRingMaterial(): THREE.SpriteMaterial {
     });
   }
   return sharedRingMaterial;
+}
+
+// Marks the current date. Unlike the new/full rings, never toggled off.
+let sharedTodayRingMaterial: THREE.SpriteMaterial | null = null;
+function getTodayRingMaterial(): THREE.SpriteMaterial {
+  if (!sharedTodayRingMaterial) {
+    sharedTodayRingMaterial = new THREE.SpriteMaterial({
+      map: getRingTexture(),
+      transparent: true,
+      depthTest: false,
+      opacity: 0.9,
+      color: TODAY_RING_COLOR,
+    });
+  }
+  return sharedTodayRingMaterial;
 }
 
 // Rasterizes text once at a fixed resolution, solid white — dimming and
@@ -245,6 +278,16 @@ export function createMoonGridView({
   const weekdayLabels: { sprite: THREE.Sprite; col: number }[] = [];
   const ringSprites: RingEntry[] = [];
   const disposables: Array<{ dispose(): void }> = [];
+  let todayMarker: RingEntry | null = null;
+
+  const todayDate = new Date();
+  function isTodayYMD(d: Date): boolean {
+    return (
+      d.getFullYear() === todayDate.getFullYear() &&
+      d.getMonth() === todayDate.getMonth() &&
+      d.getDate() === todayDate.getDate()
+    );
+  }
 
   months.forEach((month0, row) => {
     if (!isCalendar) {
@@ -274,9 +317,16 @@ export function createMoonGridView({
       mesh.userData.illuminatedPercent = visual.illuminatedPercent;
       mesh.userData.isNewMoon = isNewMoon;
       mesh.userData.isFullMoon = isFullMoon;
+      mesh.userData.isToday = isTodayYMD(date);
       scene.add(mesh);
       cells.push({ mesh, day, row });
       disposables.push(material);
+
+      if (mesh.userData.isToday) {
+        const marker = new THREE.Sprite(getTodayRingMaterial());
+        scene.add(marker);
+        todayMarker = { sprite: marker, day, row };
+      }
 
       if (isNewMoon || isFullMoon) {
         const ring = new THREE.Sprite(getRingMaterial());
@@ -305,7 +355,10 @@ export function createMoonGridView({
       disposables.push(label.material.map!, label.material);
     }
   } else {
-    for (let day = 1; day <= cols; day++) {
+    // The full 1..31 axis only makes sense when rows share it (year view);
+    // a single month labels just the days it has.
+    const labelledDays = months.length === 1 ? daysInMonth(year, months[0]!) : cols;
+    for (let day = 1; day <= labelledDays; day++) {
       const label = createTextSprite(String(day), { fontPx: 40 });
       scene.add(label);
       dayLabels.push({ sprite: label, day });
@@ -360,9 +413,15 @@ export function createMoonGridView({
   let transposed = false;
   let cellScale = 1;
   let contentWidth = 0;
+  // Content hangs downward from y = contentTop, which is above y = 0 in
+  // line mode (its header labels poke up) — the fit math has to allow for it.
+  let contentTop = 0;
   let contentHeight = 0;
   let centerX = 0;
   let centerY = 0;
+  // Vertical layouts hang under the nav; horizontal "poster" layouts stay
+  // centred in their letterbox.
+  let topAligned = false;
 
   // "Primary" axis = days (31, the long axis) — X when horizontal, Y when
   // transposed. "Secondary" axis = months (1 or 12) — the other one.
@@ -388,13 +447,29 @@ export function createMoonGridView({
   function applyLayout() {
     if (isCalendar) applyCalendarLayout();
     else applyLineLayout();
+    topAligned = isCalendar || transposed;
+    if (todayMarker) {
+      const { x, y } = cellPosFor(todayMarker.day, todayMarker.row);
+      if (isCalendar) {
+        const offset = CAL_DAY_NUMBER_OFFSET * cellScale;
+        const s = CELL_RADIUS * 2 * TODAY_NUMBER_RING_SCALE * cellScale;
+        // Between the cell and the day number (z = 0.01) that sits in it.
+        todayMarker.sprite.position.set(x - offset, y + offset, 0.005);
+        todayMarker.sprite.scale.set(s, s, 1);
+      } else {
+        const s = CELL_RADIUS * 2 * TODAY_RING_SCALE * cellScale;
+        todayMarker.sprite.position.set(x, y, -0.04);
+        todayMarker.sprite.scale.set(s, s, 1);
+      }
+    }
   }
 
   function applyCalendarLayout() {
     contentWidth = CAL_LEFT_GUTTER * 2 + 7 * SPACING;
+    contentTop = 0;
     contentHeight = TOP_GUTTER + calendarWeeks * SPACING;
     centerX = contentWidth / 2;
-    centerY = -contentHeight / 2;
+    centerY = contentTop - contentHeight / 2;
 
     for (const { mesh, day, row } of cells) {
       const { x, y } = calendarPosFor(day);
@@ -445,9 +520,11 @@ export function createMoonGridView({
     const primaryCount = cols;
     const secondaryCount = rows;
     contentWidth = LEFT_GUTTER + (transposed ? secondaryCount : primaryCount) * SPACING;
-    contentHeight = TOP_GUTTER + (transposed ? primaryCount : secondaryCount) * SPACING;
+    // Half a label's height clears the tops of the header labels.
+    contentTop = (transposed ? TOP_GUTTER * 0.3 : SPACING * 0.15) + 0.35 * cellScale;
+    contentHeight = contentTop + TOP_GUTTER + (transposed ? primaryCount : secondaryCount) * SPACING;
     centerX = contentWidth / 2;
-    centerY = -contentHeight / 2;
+    centerY = contentTop - contentHeight / 2;
 
     for (const { mesh, day, row } of cells) {
       const { x, y } = posFor(day - 1, row);
@@ -507,8 +584,8 @@ export function createMoonGridView({
   function panBounds() {
     const minX = frustumW >= contentWidth ? centerX : frustumW / 2;
     const maxX = frustumW >= contentWidth ? centerX : contentWidth - frustumW / 2;
-    const maxY = frustumH >= contentHeight ? centerY : -frustumH / 2 + topInsetWorld;
-    const minY = frustumH >= contentHeight ? centerY : -contentHeight + frustumH / 2;
+    const maxY = frustumH >= contentHeight ? centerY : contentTop + topInsetWorld - frustumH / 2;
+    const minY = frustumH >= contentHeight ? centerY : contentTop - contentHeight + frustumH / 2;
     return { minX, maxX, minY, maxY };
   }
 
@@ -553,6 +630,35 @@ export function createMoonGridView({
     }
   }
 
+  // One-shot hint, shown the first time the grid overflows the viewport and
+  // dismissed on the first drag.
+  let hintRoot: HTMLElement | null = null;
+  let hintEl: HTMLDivElement | null = null;
+  let hintShown = false;
+  let hintTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function showPanHint() {
+    if (hintShown || !hintRoot) return;
+    hintShown = true;
+    hintEl = document.createElement("div");
+    hintEl.className = "grid-hint";
+    hintEl.textContent = "Drag to see more";
+    hintRoot.appendChild(hintEl);
+    hintTimer = setTimeout(dismissPanHint, 4000);
+  }
+
+  function dismissPanHint() {
+    if (hintTimer) {
+      clearTimeout(hintTimer);
+      hintTimer = null;
+    }
+    const el = hintEl;
+    if (!el) return;
+    hintEl = null;
+    el.classList.add("grid-hint-hidden");
+    setTimeout(() => el.remove(), 400);
+  }
+
   function selectAt(clientX: number, clientY: number) {
     const rect = canvas!.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -592,6 +698,7 @@ export function createMoonGridView({
     const deltaClientY = event.clientY - dragStartClientY;
     dragMoved = Math.max(dragMoved, Math.hypot(deltaClientX, deltaClientY));
     if (!panEnabled) return;
+    if (dragMoved >= DRAG_THRESHOLD_PX) dismissPanHint();
     // Content follows the pointer, like scrolling a map.
     panX = dragStartPanX - deltaClientX / pxPerWorldUnit;
     panY = dragStartPanY + deltaClientY / pxPerWorldUnit;
@@ -634,6 +741,7 @@ export function createMoonGridView({
     let text = `${DATE_FORMAT.format(mesh.userData.date)}. ${mesh.userData.phaseName}. ${mesh.userData.illuminatedPercent}% illuminated.`;
     if (mesh.userData.isNewMoon) text += " New moon.";
     if (mesh.userData.isFullMoon) text += " Full moon.";
+    if (mesh.userData.isToday) text += " Today.";
     announce?.(text);
   }
 
@@ -704,7 +812,8 @@ export function createMoonGridView({
   }
 
   return {
-    mount(_container, renderer) {
+    mount(container, renderer) {
+      hintRoot = container;
       canvas = renderer.domElement;
       canvas.addEventListener("pointerdown", handlePointerDown);
       canvas.addEventListener("pointermove", handlePointerMove);
@@ -735,10 +844,11 @@ export function createMoonGridView({
         transposed = nextTransposed;
         panInitialized = false; // re-derive a sensible starting pan below
       }
-      // The 1.3x close-pack boost only applies to the desktop single-row
-      // "wide strip" case — transposed/multi-row/calendar layouts rely on
-      // the min-cell-size + pan system below instead.
-      cellScale = !isCalendar && rows === 1 && !transposed ? 1.3 : 1;
+      // Close-pack boosts for the two layouts whose extent is pinned by
+      // something other than cell size: the single-row strip and the week
+      // grid's fixed 7 columns.
+      if (isCalendar) cellScale = CAL_CELL_SCALE;
+      else cellScale = rows === 1 && !transposed ? 1.3 : 1;
       applyLayout();
 
       const cellDiameterWorld = 2 * CELL_RADIUS * cellScale;
@@ -775,7 +885,12 @@ export function createMoonGridView({
           existingTopMargin = (frustumH - contentHeight) / 2;
         }
         panX = centerX;
-        panY = centerY + Math.max(0, topInsetWorld - existingTopMargin);
+        // Math.min takes whichever puts content higher, which only picks
+        // the top-aligned value when frustumH > contentHeight + 2 × inset —
+        // so it can never push the bottom rows out of a view with no pan.
+        const topAlignedPanY = contentTop + topInsetWorld - frustumH / 2;
+        const centredPanY = centerY + Math.max(0, topInsetWorld - existingTopMargin);
+        panY = topAligned ? Math.min(centredPanY, topAlignedPanY) : centredPanY;
       } else {
         panEnabled = true;
         const targetPxPerWorldUnit = MIN_CELL_PX / cellDiameterWorld;
@@ -794,6 +909,7 @@ export function createMoonGridView({
       }
       panInitialized = true;
       applyCamera();
+      if (panEnabled) showPanHint();
     },
 
     // Called by main.js when the user flips the rings toggle while this
@@ -816,6 +932,9 @@ export function createMoonGridView({
         canvas.removeAttribute("role");
         canvas.removeAttribute("aria-label");
       }
+      dismissPanHint();
+      hintRoot = null;
+      // Marker sprites use shared materials; only `disposables` is ours.
       disposables.forEach((d) => d.dispose());
       cells.length = 0;
     },

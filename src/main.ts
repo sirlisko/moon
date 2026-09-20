@@ -17,9 +17,10 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
+// Appended to the body further down, after the nav and icon cluster, so tab
+// order follows the visual order rather than starting on the HUD button.
 const viewContainer = document.createElement("div");
 viewContainer.id = "view-overlay";
-document.body.appendChild(viewContainer);
 
 // Kick the color map off immediately, in parallel with everything
 // else, rather than waiting for whichever view happens to mount first —
@@ -127,10 +128,17 @@ gridLabel.addEventListener("click", () => {
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const kind = btn.dataset.view as AppView;
-    const today = new Date();
     if (kind === "month" || kind === "year") {
-      state.year = today.getFullYear();
-      state.month = today.getMonth();
+      // Carry the date on screen into the grid rather than jumping to the
+      // present; only "Today" has no browsed date of its own to carry.
+      if (state.view === "detail" && state.detailDate) {
+        state.year = state.detailDate.getFullYear();
+        state.month = state.detailDate.getMonth();
+      } else if (state.view === "today") {
+        const today = new Date();
+        state.year = today.getFullYear();
+        state.month = today.getMonth();
+      }
     }
     setView(kind);
   });
@@ -161,6 +169,14 @@ function stepNav(delta: number) {
   setView(state.view);
 }
 
+function backLabel(): string {
+  const r = state.returnTo;
+  if (!r) return "← Back";
+  if (r.view === "today") return "← Back to today";
+  if (r.view === "year") return `← Back to ${r.year}`;
+  return `← Back to ${MONTH_NAMES[r.month]} ${r.year}`;
+}
+
 function goToDetail(date: Date) {
   state.returnTo = { view: state.view, year: state.year, month: state.month };
   state.detailDate = date;
@@ -177,6 +193,8 @@ const chrome = createChromeButtons({
   onToggleCalendarMode: () => setView(state.view),
 });
 
+document.body.appendChild(viewContainer);
+
 function setView(kind: AppView) {
   if (activeView) {
     activeView.dispose();
@@ -186,6 +204,9 @@ function setView(kind: AppView) {
   state.view = kind;
 
   navButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === kind));
+  // A detail view matches none of Today/Month/Year — there the date is
+  // what's current, so the label carries the active treatment instead.
+  gridLabel.classList.toggle("active", kind === "detail");
   // The rings toggle only means anything on the grid — showing it on
   // Today/detail (where there's nothing to toggle) is just confusing.
   chrome.ringsButton.hidden = kind !== "month" && kind !== "year";
@@ -231,6 +252,7 @@ function setView(kind: AppView) {
       location,
       live: false,
       onBack: () => setView(state.returnTo!.view),
+      backLabel: backLabel(),
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
       getTopInset: chrome.getTopInset,

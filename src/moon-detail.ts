@@ -52,6 +52,8 @@ export interface MoonDetailViewOptions {
   location: LocationState;
   live: boolean;
   onBack: (() => void) | null;
+  // Names where onBack actually goes (worded by main.js); unused without it.
+  backLabel?: string;
   onRequestLocation?: () => void;
   announce?: (text: string) => void;
   // Live pixel measurement (from chrome-buttons.js) of the safe top offset
@@ -78,6 +80,7 @@ export function createMoonDetailView({
   location,
   live,
   onBack,
+  backLabel = "← Back",
   onRequestLocation,
   announce,
   getTopInset,
@@ -148,6 +151,26 @@ export function createMoonDetailView({
     if (resetButton) resetButton.style.top = top;
   }
 
+  // Nothing to recompute while the tab is hidden; the catch-up refresh on
+  // the way back keeps the Moon from sitting at a stale time until the tick.
+  function startTicking() {
+    if (intervalId === null) intervalId = setInterval(refresh, REFRESH_INTERVAL_MS);
+  }
+  function stopTicking() {
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  }
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      stopTicking();
+    } else {
+      refresh();
+      startTicking();
+    }
+  }
+
   function applyMoonState(state: MoonState) {
     moonState = state;
     const sunDir = sunDirFromPhase(state.phase);
@@ -177,11 +200,11 @@ export function createMoonDetailView({
         lines.push(`${rise} · ${set}`);
       }
     } else if (location.status === "denied") {
-      lines.push("Location not available");
+      lines.push("Location blocked in your browser");
     } else if (location.status === "unsupported") {
       lines.push("Location not supported on this browser");
     }
-    if (!live) lines.push(DATE_FORMAT.format(date!));
+    // No date line here: the nav's date label already shows it.
     if (label) label.innerHTML = lines.join("<br>");
 
     // Live re-refreshes every 30s — only announce on an actual date change
@@ -189,11 +212,21 @@ export function createMoonDetailView({
     if (!live) announce?.(`${DATE_FORMAT.format(date!)}. ${phaseLine}.`);
 
     if (locationButton) {
-      const needsButton = !current.horizon && (location.status === "idle" || location.status === "pending");
+      // "denied" still offers a retry (requestLocation asks again, and the
+      // browser may answer from its own remembered choice); "unsupported"
+      // is the one state with nothing left to try.
+      const canAsk =
+        location.status === "idle" || location.status === "pending" || location.status === "denied";
+      const needsButton = !current.horizon && canAsk;
       locationButton.hidden = !needsButton;
       if (needsButton) {
         locationButton.disabled = location.status === "pending";
-        locationButton.textContent = location.status === "pending" ? "Locating…" : "📍 Use my location";
+        locationButton.textContent =
+          location.status === "pending"
+            ? "Locating…"
+            : location.status === "denied"
+              ? "📍 Try again"
+              : "📍 Use my location";
       }
     }
   }
@@ -221,7 +254,7 @@ export function createMoonDetailView({
       if (onBack) {
         backButton = document.createElement("button");
         backButton.className = "back-button";
-        backButton.textContent = "← Back to calendar";
+        backButton.textContent = backLabel;
         backButton.addEventListener("click", onBack);
         root.appendChild(backButton);
       }
@@ -246,7 +279,8 @@ export function createMoonDetailView({
 
       refresh();
       if (live) {
-        intervalId = setInterval(refresh, REFRESH_INTERVAL_MS);
+        startTicking();
+        document.addEventListener("visibilitychange", handleVisibilityChange);
       }
     },
 
@@ -280,7 +314,8 @@ export function createMoonDetailView({
     refreshLocation: refresh,
 
     dispose() {
-      if (intervalId) clearInterval(intervalId);
+      stopTicking();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (controls) controls.dispose();
       if (hud) hud.remove();
       if (backButton) backButton.remove();
