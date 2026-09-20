@@ -12,10 +12,28 @@ export type OrientationStatus =
   | "insecure";
 
 // Where the *back* of the phone points — the direction you'd sight along
-// holding the screen up between you and the sky.
+// holding the screen up between you and the sky — plus how the screen itself
+// is turned about that line. The sight line alone can't say which way is up
+// on screen, and the two move independently: rolling the phone to landscape
+// leaves the sight line exactly where it was.
 export interface DeviceDirection {
   azimuth: number; // degrees clockwise from north
   altitude: number; // degrees above the horizon
+  roll: number; // degrees the screen is turned about the sight line, 0 = screen-up level
+}
+
+// An offset from the sight line as it lands on the screen: degrees right and
+// up the *screen's* axes, with the true angle between the two directions.
+export interface ScreenOffset {
+  right: number;
+  up: number;
+  separation: number;
+}
+
+interface EarthVector {
+  east: number;
+  north: number;
+  up: number;
 }
 
 export interface OrientationState {
@@ -57,7 +75,8 @@ export function angleDelta(from: number, to: number): number {
 // The W3C angles describe R = Rz(alpha)·Rx(beta)·Ry(gamma), taking device
 // coordinates into the earth frame (x east, y north, z up). Device +z comes
 // out of the front of the screen, so R's third column is where the screen
-// faces and its negation is the sight line. Collapsed to that one column.
+// faces and its negation is the sight line. Collapsed to the two pieces the
+// viewfinder needs: that column, and the roll taken from R's third row.
 export function deviceDirection(alpha: number, beta: number, gamma: number): DeviceDirection {
   const a = toRad(alpha);
   const b = toRad(beta);
@@ -67,9 +86,55 @@ export function deviceDirection(alpha: number, beta: number, gamma: number): Dev
   const north = -(Math.sin(a) * Math.sin(g) - Math.cos(a) * Math.sin(b) * Math.cos(g));
   const up = -(Math.cos(b) * Math.cos(g));
 
+  // Roll compares the two axes' share of world up: the third row of R, which
+  // is where the device's own x and y axes stand relative to the vertical.
+  // Alpha drops out — turning on the spot doesn't roll the screen.
   return {
     azimuth: (toDeg(Math.atan2(east, north)) + 360) % 360,
     altitude: toDeg(Math.asin(Math.min(1, Math.max(-1, up)))),
+    roll: (toDeg(Math.atan2(-Math.cos(b) * Math.sin(g), Math.sin(b))) + 360) % 360,
+  };
+}
+
+const dot = (a: EarthVector, b: EarthVector) => a.east * b.east + a.north * b.north + a.up * b.up;
+
+function unitVector(azimuth: number, altitude: number): EarthVector {
+  const az = toRad(azimuth);
+  const alt = toRad(altitude);
+  return {
+    east: Math.sin(az) * Math.cos(alt),
+    north: Math.cos(az) * Math.cos(alt),
+    up: Math.sin(alt),
+  };
+}
+
+// Where a sky position falls on a viewfinder aimed along `view`.
+//
+// A difference of bearings is not an angle in the sky — at 60° up, 20° of
+// azimuth is only 10° of arc — so the offset is measured as a true angular
+// separation and then laid out around the sight line: `separation` is how far
+// off the target is, and the direction it lies in is turned by the phone's
+// roll, which is what makes the dial agree with the sky in landscape.
+export function screenOffset(view: DeviceDirection, azimuth: number, altitude: number): ScreenOffset {
+  const target = unitVector(azimuth, altitude);
+  const sight = unitVector(view.azimuth, view.altitude);
+  // The level frame around the sight line: `right` stays horizontal whatever
+  // the phone is doing, `up` completes it. Both survive a sight line straight
+  // up or down, where azimuth itself stops meaning anything.
+  const az = toRad(view.azimuth);
+  const right: EarthVector = { east: Math.cos(az), north: -Math.sin(az), up: 0 };
+  const up: EarthVector = {
+    east: right.north * sight.up - right.up * sight.north,
+    north: right.up * sight.east - right.east * sight.up,
+    up: right.east * sight.north - right.north * sight.east,
+  };
+
+  const separation = toDeg(Math.acos(Math.min(1, Math.max(-1, dot(target, sight)))));
+  const bearing = Math.atan2(dot(target, right), dot(target, up)) + toRad(view.roll);
+  return {
+    right: separation * Math.sin(bearing),
+    up: separation * Math.cos(bearing),
+    separation,
   };
 }
 

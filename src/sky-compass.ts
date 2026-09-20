@@ -1,15 +1,17 @@
-import { angleDelta } from "./orientation.js";
-import type { OrientationState } from "./orientation.js";
+import { angleDelta, screenOffset } from "./orientation.js";
+import type { DeviceDirection, OrientationState } from "./orientation.js";
 import { azimuthToCompass } from "./astronomy.js";
 import { setIconLabel } from "./icons.js";
 import type { IconName } from "./icons.js";
 
 // A heads-up viewfinder rather than a map-style compass rose: the centre of
 // the dial is wherever the back of the phone points, and the Moon marker
-// sits at its offset from there. That reading holds however the phone is
-// rotated in your hands — the direction the back faces doesn't change when
-// the screen flips to landscape — so unlike a north-up rose this needs no
-// screen-orientation correction anywhere.
+// sits where the Moon falls relative to that — so the marker is read against
+// the screen's own axes, which is why placement goes through screenOffset()
+// (roll included) rather than subtracting bearings. The `window.orientation`
+// / screen-orientation API never comes into it: the phone's own roll is in
+// the sensor reading already, and it is continuous where the API's four
+// quadrants are not.
 
 // The dial shrinks on small phones (see style.css), so its working radius is
 // measured rather than hard-coded; the inset keeps a rim-pinned marker
@@ -54,6 +56,7 @@ export function createSkyCompass({
   let available = false;
   let smoothAzimuth: number | null = null;
   let smoothAltitude = 0;
+  let smoothRoll = 0;
   let wasAligned = false;
 
   const button = document.createElement("button");
@@ -142,9 +145,11 @@ export function createSkyCompass({
     if (smoothAzimuth === null) {
       smoothAzimuth = direction.azimuth;
       smoothAltitude = direction.altitude;
+      smoothRoll = direction.roll;
     } else {
       smoothAzimuth = (smoothAzimuth + angleDelta(smoothAzimuth, direction.azimuth) * SMOOTHING + 360) % 360;
       smoothAltitude += (direction.altitude - smoothAltitude) * SMOOTHING;
+      smoothRoll = (smoothRoll + angleDelta(smoothRoll, direction.roll) * SMOOTHING + 360) % 360;
     }
 
     // Vertical offsets are measured against the phone's own pitch, so they
@@ -153,13 +158,30 @@ export function createSkyCompass({
     // you to tilt — the tilt figure would be a correction to how you happen
     // to be holding the phone, not a direction to look.
     const bearingOnly = target.altitude < 0;
+    // Both the turn and the tilt the *body* has to make, which is what the
+    // hint below talks in — a bearing difference, not an angle in the sky.
     const rightOfCentre = angleDelta(smoothAzimuth, target.azimuth);
-    const aboveCentre = bearingOnly ? 0 : target.altitude - smoothAltitude;
-    place(marker, rightOfCentre, aboveCentre);
-    place(north, angleDelta(smoothAzimuth, 0), bearingOnly ? 0 : -smoothAltitude);
+    const aboveCentre = target.altitude - smoothAltitude;
+
+    let separation: number;
+    if (bearingOnly) {
+      // The dial is a flat bearing compass drawn on a screen-level line (see
+      // .is-bearing-only in style.css), so the markers sit on that line and
+      // carry the body turn rather than anything to sight along.
+      place(marker, rightOfCentre, 0);
+      place(north, angleDelta(smoothAzimuth, 0), 0);
+      separation = Math.abs(rightOfCentre);
+    } else {
+      const view: DeviceDirection = { azimuth: smoothAzimuth, altitude: smoothAltitude, roll: smoothRoll };
+      const moon = screenOffset(view, target.azimuth, target.altitude);
+      place(marker, moon.right, moon.up);
+      // North on the horizon, not the pole — the same direction the hint names.
+      const trueNorth = screenOffset(view, 0, 0);
+      place(north, trueNorth.right, trueNorth.up);
+      separation = moon.separation;
+    }
     ring.classList.toggle("is-bearing-only", bearingOnly);
 
-    const separation = bearingOnly ? Math.abs(rightOfCentre) : Math.hypot(rightOfCentre, aboveCentre);
     const aligned = separation <= ALIGNED_DEGREES;
     ring.classList.toggle("is-aligned", aligned);
 

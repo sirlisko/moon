@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deviceDirection, angleDelta } from "./orientation.js";
+import { deviceDirection, angleDelta, screenOffset } from "./orientation.js";
 
 // The W3C angles are intrinsic Z-X'-Y'': alpha spins the phone about the
 // vertical (counter-clockwise, so a compass heading is 360 - alpha), beta
@@ -49,6 +49,34 @@ function eulerFromMatrix(m: Matrix): [number, number, number] {
   return [toDeg(alpha), toDeg(beta), toDeg(gamma)];
 }
 
+// A sky direction as a unit vector in the earth frame the matrix works in.
+function skyVector(azimuth: number, altitude: number): number[] {
+  return [
+    Math.sin(toRad(azimuth)) * Math.cos(toRad(altitude)),
+    Math.cos(toRad(azimuth)) * Math.cos(toRad(altitude)),
+    Math.sin(toRad(altitude)),
+  ];
+}
+
+const column = (m: Matrix, i: number): number[] => [m[0]![i]!, m[1]![i]!, m[2]![i]!];
+const dot = (a: number[], b: number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+
+// What the viewfinder should show, read straight off the matrix: how far the
+// target is from the sight line, in the direction the *screen's* own axes put
+// it. The device's x and y columns are those axes, so this pins the roll
+// convention the same way sightLine pins the bearing one.
+function screenTruth(m: Matrix, azimuth: number, altitude: number) {
+  const target = skyVector(azimuth, altitude);
+  const sight = column(m, 2).map((v) => -v);
+  const separation = toDeg(Math.acos(Math.min(1, Math.max(-1, dot(target, sight)))));
+  const bearing = Math.atan2(dot(target, column(m, 0)), dot(target, column(m, 1)));
+  return {
+    right: separation * Math.sin(bearing),
+    up: separation * Math.cos(bearing),
+    separation,
+  };
+}
+
 // The device's -z axis in earth coordinates, straight from the matrix.
 function sightLine(m: Matrix): { azimuth: number; altitude: number } {
   const east = -m[0]![2]!;
@@ -86,6 +114,13 @@ describe("deviceDirection", () => {
   it("reads beta past upright as tilting the sight line skyward", () => {
     expect(deviceDirection(0, 45, 0).altitude).toBeCloseTo(-45, 6);
     expect(deviceDirection(0, 135, 0).altitude).toBeCloseTo(45, 6);
+  });
+
+  it("reads no roll while the screen's top edge is the high one", () => {
+    // Roll is about the sight line, so which way the phone faces can't affect
+    // it — only how it's turned in the hand.
+    expect(deviceDirection(0, 90, 0).roll).toBeCloseTo(0, 6);
+    expect(deviceDirection(210, 45, 0).roll).toBeCloseTo(0, 6);
   });
 
   it("agrees with the full Z-X'-Y'' matrix across the angle ranges", () => {
@@ -127,6 +162,73 @@ describe("deviceDirection", () => {
           expect(azimuth).toBeLessThan(360);
           expect(altitude).toBeGreaterThanOrEqual(-90);
           expect(altitude).toBeLessThanOrEqual(90);
+        }
+      }
+    }
+  });
+});
+
+describe("screenOffset", () => {
+  const view = (alpha: number, beta: number, gamma: number) => deviceDirection(alpha, beta, gamma);
+
+  it("puts a target on the sight line at the centre", () => {
+    const sight = deviceDirection(160, 130, 0);
+    const offset = screenOffset(sight, sight.azimuth, sight.altitude);
+    expect(offset.separation).toBeCloseTo(0, 6);
+    expect(offset.right).toBeCloseTo(0, 6);
+    expect(offset.up).toBeCloseTo(0, 6);
+  });
+
+  it("measures the true angle apart, not the difference in bearings", () => {
+    // 20° of azimuth is a much shorter way round the sky 60° up than it is on
+    // the horizon — about 10°. Taking the bearing difference for the offset
+    // pushed a high Moon off the dial and held off the aligned glow.
+    const high = screenOffset({ azimuth: 0, altitude: 60, roll: 0 }, 20, 60);
+    expect(high.separation).toBeCloseTo(
+      toDeg(Math.acos(dot(skyVector(0, 60), skyVector(20, 60)))),
+      6
+    );
+    expect(high.separation).toBeLessThan(11);
+  });
+
+  it("turns the offset with the phone's roll", () => {
+    // Upright phone sighting north, Moon 20° above the sight line: portrait
+    // puts it straight up the screen, and rolling a quarter turn to landscape
+    // has to swing it round to the side.
+    const portrait = screenOffset(view(0, 90, 0), 0, 20);
+    expect(portrait.right).toBeCloseTo(0, 6);
+    expect(portrait.up).toBeCloseTo(20, 6);
+
+    for (const roll of [-90, 90, 180]) {
+      // A thousandth off upright, since bolt upright is the gimbal lock that
+      // eulerFromMatrix can't come back through — hence the loose tolerance.
+      const rolled = eulerFromMatrix(multiply(deviceToEarth(0, 90.001, 0), rotZ(toRad(roll))));
+      const offset = screenOffset(view(rolled[0]!, rolled[1]!, rolled[2]!), 0, 20);
+      expect(offset.separation).toBeCloseTo(20, 2);
+      expect(offset.right).toBeCloseTo(20 * Math.sin(toRad(roll)), 2);
+      expect(offset.up).toBeCloseTo(20 * Math.cos(toRad(roll)), 2);
+    }
+  });
+
+  it("agrees with the screen axes taken straight from the matrix", () => {
+    for (let alpha = 0; alpha < 360; alpha += 53) {
+      for (let beta = -170; beta < 180; beta += 31) {
+        for (let gamma = -80; gamma <= 80; gamma += 37) {
+          const attitude = deviceToEarth(alpha, beta, gamma);
+          const direction = deviceDirection(alpha, beta, gamma);
+          for (const [azimuth, altitude] of [
+            [0, 0],
+            [95, 12],
+            [212, 47],
+            [300, 78],
+            [40, -25],
+          ] as const) {
+            const expected = screenTruth(attitude, azimuth, altitude);
+            const actual = screenOffset(direction, azimuth, altitude);
+            expect(actual.separation).toBeCloseTo(expected.separation, 6);
+            expect(actual.right).toBeCloseTo(expected.right, 6);
+            expect(actual.up).toBeCloseTo(expected.up, 6);
+          }
         }
       }
     }
