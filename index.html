@@ -4,26 +4,116 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Moon</title>
-  <meta name="description" content="A live 3D Moon showing its real phase and position from your location, plus a calendar of every day's moon phase." />
+  <title>Moon Phase Today — Live 3D Moon & Lunar Calendar</title>
+  <meta name="description" content="See tonight's moon phase on a live 3D Moon built from real NASA imagery, plus where to look for it from your location and a calendar of every day's phase." />
+  <link rel="canonical" href="https://moon.sirlisko.com/" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="theme-color" content="#0b0b10" />
 
+  <!-- The color map is the largest asset and the one the loading overlay waits
+       on. Without this it can only start downloading after the JS bundle has
+       parsed; preloading gets it onto the wire in parallel with the module. -->
+  <link rel="preload" as="image" href="/lroc_color_2k.webp" type="image/webp" fetchpriority="high" />
+
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="Moon" />
-  <meta property="og:description" content="A live 3D Moon showing its real phase and position from your location, plus a calendar of every day's moon phase." />
-  <meta property="og:image" content="/og-image.png" />
+  <meta property="og:site_name" content="Moon" />
+  <meta property="og:url" content="https://moon.sirlisko.com/" />
+  <meta property="og:locale" content="en" />
+  <meta property="og:title" content="Moon Phase Today — Live 3D Moon & Lunar Calendar" />
+  <meta property="og:description" content="See tonight's moon phase on a live 3D Moon built from real NASA imagery, plus where to look for it from your location and a calendar of every day's phase." />
+  <meta property="og:image" content="https://moon.sirlisko.com/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="A 3D render of the Moon in its current phase, above a calendar grid of daily moons." />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Moon" />
-  <meta name="twitter:description" content="A live 3D Moon showing its real phase and position from your location, plus a calendar of every day's moon phase." />
-  <meta name="twitter:image" content="/og-image.png" />
+  <meta name="twitter:title" content="Moon Phase Today — Live 3D Moon & Lunar Calendar" />
+  <meta name="twitter:description" content="See tonight's moon phase on a live 3D Moon built from real NASA imagery, plus where to look for it from your location and a calendar of every day's phase." />
+  <meta name="twitter:image" content="https://moon.sirlisko.com/og-image.png" />
+  <meta name="twitter:image:alt" content="A 3D render of the Moon in its current phase, above a calendar grid of daily moons." />
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Moon",
+      "url": "https://moon.sirlisko.com/",
+      "description": "A live 3D model of the Moon showing its real phase and position as seen from your location, plus a calendar with every day's moon phase.",
+      "image": "https://moon.sirlisko.com/og-image.png",
+      "applicationCategory": "EducationalApplication",
+      "operatingSystem": "Any",
+      "browserRequirements": "Requires WebGL",
+      "isAccessibleForFree": true,
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "author": { "@type": "Person", "name": "Luca Lischetti", "url": "https://sirlisko.com" }
+    }
+  </script>
+
+  <!-- Inline rather than in style.css: the stylesheet arrives with the JS
+       bundle, and this block would otherwise flash over the canvas on load. -->
+  <style>
+    #page-intro {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
 </head>
 
 <body>
   <canvas id="bg"></canvas>
+
+  <!-- The app is a WebGL canvas, so this is the only text a crawler sees
+       before the bundle runs, and the page's only <h1>. -->
+  <div id="page-intro">
+    <h1>Moon phase today, and a calendar of every day's moon</h1>
+    <p>
+      A live 3D model of the Moon showing tonight's real phase and libration, rendered from NASA
+      Lunar Reconnaissance Orbiter imagery. Share your location and it also shows how high the Moon
+      is, which way to look for it, and moonrise and moonset times.
+    </p>
+    <p>
+      Browse a month or a year of moon phases as a calendar grid, or open any date to see the Moon
+      as it looked, or will look, from where you are.
+    </p>
+  </div>
+
+  <div id="about-overlay" hidden>
+    <div id="about-card" role="dialog" aria-modal="true" aria-label="About this app" tabindex="-1">
+      <button id="about-close" aria-label="Close"></button>
+      <h2>About this moon</h2>
+      <p>
+        A live 3D model of the Moon, showing its real phase and position
+        as seen from your location. Plus a calendar with every day's
+        moon phase, like a printed lunar calendar.
+      </p>
+      <p class="about-byline">
+        Made by <a href="https://sirlisko.com" target="_blank" rel="noopener">Luca Lischetti (sirlisko)</a>
+      </p>
+      <h3>How it works</h3>
+      <ul>
+        <li>The phase, brightness, and slight wobble of the Moon (called libration) come from real astronomy data, not a rough guess.</li>
+        <li>If you share your location, the Moon also tilts to match what you would really see looking up, and the app shows how high it is and which direction to look.</li>
+        <li>Each day in the calendar uses the same math, checked at noon that day. Click a day to see it up close.</li>
+        <li>On a phone, "Point me at the Moon" uses the built-in compass to show which way to turn and how far to look up. Phone compasses read magnetic north and are only accurate to about ten degrees, so treat it as a nudge in the right direction rather than a precise sight.</li>
+        <li>Your location stays in your browser. It is never sent anywhere.</li>
+      </ul>
+      <h3>Credits</h3>
+      <ul>
+        <li>Moon images: <a href="https://svs.gsfc.nasa.gov/4720" target="_blank" rel="noopener">NASA SVS CGI Moon Kit</a>. Color and height data from NASA's Lunar Reconnaissance Orbiter.</li>
+        <li>Astronomy math: <a href="https://github.com/cosinekitty/astronomy" target="_blank" rel="noopener">astronomy-engine</a> by Don Cross.</li>
+        <li>3D rendering: <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a>.</li>
+      </ul>
+    </div>
+  </div>
+
   <script type="module" src="/src/main.ts"></script>
 </body>
 

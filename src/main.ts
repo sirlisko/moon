@@ -58,6 +58,12 @@ function announce(text: string) {
 const { location, requestLocation } = createLocationState();
 const { orientation, requestOrientation, stopOrientation } = createOrientationState();
 
+// The title index.html ships, captured before any view overwrites it. The
+// today view is what "/" serves, so that's the one a search engine indexes —
+// putting the date there instead would replace the page's only keyword-bearing
+// title with a string nobody searches for. The nav bar shows the date anyway.
+const LANDING_TITLE = document.title;
+
 const NAV_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -213,7 +219,7 @@ function stepNav(delta: number) {
 
 function syncDetailLabel() {
   gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate!);
-  document.title = `${gridLabel.textContent} · Moon`;
+  document.title = `${gridLabel.textContent} Moon Phase`;
 }
 
 function backLabel(): string {
@@ -270,7 +276,7 @@ function setView(kind: AppView) {
     gridNav.hidden = false;
     const today = new Date();
     gridLabel.textContent = NAV_DATE_FORMAT.format(today);
-    document.title = `Today, ${gridLabel.textContent} · Moon`;
+    document.title = LANDING_TITLE;
     activeView = createMoonDetailView({
       date: null,
       location,
@@ -287,7 +293,7 @@ function setView(kind: AppView) {
     gridNav.hidden = false;
     gridLabel.textContent =
       kind === "month" ? `${MONTH_NAMES[state.month]} ${state.year}` : `${state.year}`;
-    document.title = `${gridLabel.textContent} · Moon`;
+    document.title = `${gridLabel.textContent} Moon Phases`;
     const months = kind === "month" ? [state.month] : [...Array(12).keys()];
     activeView = createMoonGridView({
       year: state.year,

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-const COLOR_URL = "/lroc_color_2k.jpg";
+const COLOR_URL = "/lroc_color_2k.webp";
 const DISPLACEMENT_URL = "/ldem_3_8bit.jpg";
 
 let colorMap: THREE.Texture | null = null;
