@@ -25,3 +25,18 @@ test("the URL reflects navigation and restores on a fresh load", async ({ page, 
   await expect(page2.locator("#grid-label")).toHaveText("2025");
   await expect(page2.locator('button[data-view="year"]')).toHaveClass(/active/);
 });
+
+test("stepping days inside a detail view moves where back goes", async ({ page }) => {
+  await page.goto("/?view=month&year=2026&month=8");
+  await page.locator("#bg").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".back-button")).toHaveText("← Back to August 2026");
+
+  // Far enough forward to land in the next month.
+  for (let i = 0; i < 40; i++) await page.click("#grid-next");
+  await expect(page.locator("#grid-label")).toContainText("Sep");
+  await expect(page.locator(".back-button")).toHaveText("← Back to September 2026");
+
+  await page.click(".back-button");
+  await expect(page.locator("#grid-label")).toHaveText("September 2026");
+});

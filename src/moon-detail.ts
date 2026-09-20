@@ -3,25 +3,52 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { computeMoonState, getPhaseName, azimuthToCompass } from "./astronomy.js";
 import type { MoonState } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
-import { sunDirFromPhase } from "./moon-shader.js";
+import { sunDirFromPhase, earthshineFromPhase, earthshineColor, SUN_INTENSITY } from "./moon-shader.js";
 import { createSkyCompass } from "./sky-compass.js";
 import type { SkyCompass } from "./sky-compass.js";
 import type { OrientationState } from "./orientation.js";
-import type { LocationState, ViewInstance } from "./types.js";
+import type { LocationState, MoonOrigin, ViewInstance } from "./types.js";
 
 const BASE_ROTATION_Y = Math.PI * 1.54;
 const BASE_ROTATION_X = Math.PI * 0.02;
 const REFRESH_INTERVAL_MS = 30000;
-const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, 0, 5);
-const CAMERA_DEFAULT_DISTANCE = DEFAULT_CAMERA_POSITION.length();
-// Keeps the camera from crossing into the moon's surface (radius 2, plus a
-// little headroom for the displacement map) when zooming in, and from
-// zooming out so far the Moon shrinks to nothing in the starfield.
-const MIN_ZOOM_DISTANCE = 2.5;
-const MAX_ZOOM_DISTANCE = 20;
-
 const MOON_RADIUS = 2;
-const DEFAULT_FOV = 75;
+// The real Moon is ~110 of its own radii away, so what we see from Earth is
+// all but an orthographic projection: a full hemisphere, with the thin
+// crescents sitting right on the limb. A camera parked a couple of radii out
+// (this was 2.5) sees a noticeably *smaller* cap than that — only where
+// n·z > radius/distance — and a waning crescent a few percent illuminated
+// falls entirely outside it, which rendered days like 2026-09-09 pure black
+// while the (orthographic) calendar cell for the same day correctly showed a
+// sliver. 25 radii is near-orthographic enough to keep crescents down to a
+// fraction of a percent, without the depth-precision of a truly vast scene.
+const CAMERA_DEFAULT_DISTANCE = MOON_RADIUS * 25;
+const DEFAULT_CAMERA_POSITION = new THREE.Vector3(0, 0, CAMERA_DEFAULT_DISTANCE);
+// The displacement map is applied with no bias, so it only ever pushes the
+// surface outward: the silhouette the moon actually draws is this much wider
+// than the sphere's nominal radius. A grid cell carries no displacement and so
+// has no such margin, which is why the flight solves its landing scale against
+// the drawn radius rather than the nominal one — against the nominal one the
+// moon arrives 3% larger than the cell it came from and snaps a frame later,
+// when the grid takes over.
+const DISPLACEMENT_SCALE = 0.06;
+const SILHOUETTE_RADIUS = MOON_RADIUS + DISPLACEMENT_SCALE;
+// Fraction of the viewport half-height the Moon's silhouette covers at that
+// distance — the framing the old 75° FOV at 5 units gave, kept as the thing
+// that's actually meant to stay fixed now that the distance has changed.
+const MOON_FILL = 0.52;
+const DEFAULT_FOV = THREE.MathUtils.radToDeg(
+  2 * Math.atan(MOON_RADIUS / (MOON_FILL * CAMERA_DEFAULT_DISTANCE))
+);
+// Zoom range, as multiples of the default distance: the same 2× in / 4× out
+// as before. Nothing can reach the surface from here, but the clamp still
+// keeps zoom from overshooting into "Moon fills everything" / "Moon is a
+// dot in the starfield".
+const MIN_ZOOM_DISTANCE = CAMERA_DEFAULT_DISTANCE / 2;
+const MAX_ZOOM_DISTANCE = CAMERA_DEFAULT_DISTANCE * 4;
+// What counts as "the user has moved the camera" — for the Reset view button
+// and for refusing a return flight. Relative, since the distances are.
+const CAMERA_MOVED_EPSILON = CAMERA_DEFAULT_DISTANCE * 0.002;
 // How much bigger the Moon's angular size is allowed to get relative to the
 // (shrunk, on a narrow screen) horizontal field of view before we widen the
 // FOV to compensate — 1.0 would mean "touching the edges exactly."
@@ -43,6 +70,104 @@ function computeFov(aspect: number): number {
   return THREE.MathUtils.radToDeg(neededHalfVFovRad) * 2;
 }
 
+// The flight from the calendar cell the user clicked into this view's own
+// framing. The grid hands over the cell's on-screen circle (MoonOrigin) and
+// the moon starts there, so the two views read as one continuous object
+// instead of a cut; the fades bring in everything the grid had no
+// counterpart for (stars, HUD, back button).
+const TRANSITION_MS = 520;
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+// Stepping a day with the nav arrows keeps this view mounted and eases the
+// sky from one day to the next (the terminator sweeps across, the tilt
+// follows) rather than cutting — see setDate below.
+const STEP_MS = 450;
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+// Phase is a 0..1 cycle fraction, so a step across new moon (0.99 → 0.01)
+// has to take the short way round rather than sweeping back over the whole
+// cycle; the same goes for the parallactic angle in radians.
+function blendCycle(from: number, to: number, t: number, period: number): number {
+  let delta = (to - from) % period;
+  if (delta > period / 2) delta -= period;
+  if (delta < -period / 2) delta += period;
+  return from + delta * t;
+}
+
+// The parallactic angle rolls the Moon's whole appearance about the line of
+// sight — the terminator turns with the surface — so it can't be a
+// `moon.rotation.z`: three.js composes an XYZ Euler as Rx·Ry·Rz, which
+// applies the z term in the *moon's* frame, and under BASE_ROTATION_Y (~277°)
+// that axis lands within a couple of degrees of world -x. Setting rotation.z
+// therefore pitched the sphere about the horizontal screen axis, spinning the
+// surface north/south under a terminator that stayed put — 41° of it for a
+// mid-latitude observer. The roll is applied in world space instead, to the
+// moon's orientation and to the sun direction alike.
+const VIEW_AXIS = new THREE.Vector3(0, 0, 1);
+
+// A near-orthographic camera means a narrow FOV, which means only ~0.3% of
+// the sky is in frame at once — a few thousand stars spread over the whole
+// sphere left about a dozen on screen, more dust specks than a sky. This many
+// keeps roughly the on-screen density the old wide-angle view had.
+const STAR_COUNT = 200000;
+const STAR_SPHERE_RADIUS = 800;
+
+// Built once and shared by every detail view, like the textures: the
+// positions are identical every time (see the seeding below), it costs a
+// noticeable moment to generate, and nothing ever mutates it.
+//
+// Split into a grid of sky patches rather than one giant point cloud, so
+// three.js's per-object frustum culling can skip the ~98% of the sky that a
+// narrow FOV leaves off screen — otherwise every one of these stars runs
+// through the vertex shader on every frame to be clipped, which measurably
+// costs frames (2.6× the frame time of the old sparse field, even before a
+// weaker GPU is involved). Only the handful of patches actually in view draw.
+const STAR_PATCHES_AZIMUTH = 12;
+const STAR_PATCHES_POLAR = 8;
+let sharedStarPatches: THREE.BufferGeometry[] | null = null;
+function getStarPatches(): THREE.BufferGeometry[] {
+  if (sharedStarPatches) return sharedStarPatches;
+  // Seeded rather than Math.random(): stepping off "Today" rebuilds the view,
+  // and a freshly scrambled sky under an otherwise-unchanged moon is a jump
+  // cut all by itself. Same stars every time, so only the moon moves.
+  let seed = 0x9e3779b9;
+  function random(): number {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  const patches: number[][] = Array.from(
+    { length: STAR_PATCHES_AZIMUTH * STAR_PATCHES_POLAR },
+    () => []
+  );
+  for (let i = 0; i < STAR_COUNT; i++) {
+    // cos(phi) uniform in [-1, 1] keeps the distribution even over the
+    // sphere rather than bunching at the poles.
+    const cosPhi = 2 * random() - 1;
+    const theta = random() * Math.PI * 2;
+    const sinPhi = Math.sqrt(1 - cosPhi * cosPhi);
+    const a = Math.min(STAR_PATCHES_AZIMUTH - 1, Math.floor((theta / (Math.PI * 2)) * STAR_PATCHES_AZIMUTH));
+    const pol = Math.min(STAR_PATCHES_POLAR - 1, Math.floor(((cosPhi + 1) / 2) * STAR_PATCHES_POLAR));
+    patches[a * STAR_PATCHES_POLAR + pol]!.push(
+      STAR_SPHERE_RADIUS * sinPhi * Math.cos(theta),
+      STAR_SPHERE_RADIUS * sinPhi * Math.sin(theta),
+      STAR_SPHERE_RADIUS * cosPhi
+    );
+  }
+  sharedStarPatches = patches
+    .filter((coords) => coords.length > 0)
+    .map((coords) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(coords), 3));
+      return geometry;
+    });
+  return sharedStarPatches;
+}
+
 const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "long",
@@ -55,6 +180,10 @@ export interface MoonDetailViewOptions {
   location: LocationState;
   live: boolean;
   onBack: (() => void) | null;
+  // Where this moon already is on screen (a grid cell the user just picked);
+  // when set, the view flies it from there into place on mount. Absent for
+  // any other route in (nav, URL restore, date picker), which just cut.
+  from?: MoonOrigin | null;
   // Names where onBack actually goes (worded by main.js); unused without it.
   backLabel?: string;
   onRequestLocation?: () => void;
@@ -88,6 +217,7 @@ export function createMoonDetailView({
   location,
   live,
   onBack,
+  from = null,
   backLabel = "← Back",
   onRequestLocation,
   orientation,
@@ -97,7 +227,9 @@ export function createMoonDetailView({
   getTopInset,
 }: MoonDetailViewOptions): ViewInstance {
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 0.1, 1000);
+  // Far plane clears the star sphere (radius 800) even at maximum zoom-out;
+  // near plane is well inside the closest the camera can get.
+  const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 1, 3000);
   camera.position.copy(DEFAULT_CAMERA_POSITION);
 
   const moon = new THREE.Mesh(
@@ -106,7 +238,7 @@ export function createMoonDetailView({
       color: 0xffffff,
       map: getColorMap(),
       displacementMap: getDisplacementMap(),
-      displacementScale: 0.06,
+      displacementScale: DISPLACEMENT_SCALE,
       bumpMap: getDisplacementMap(),
       bumpScale: 0.04,
       reflectivity: 0,
@@ -117,30 +249,30 @@ export function createMoonDetailView({
   moon.rotation.y = BASE_ROTATION_Y;
   scene.add(moon);
 
-  const starPositions = new Float32Array(8000 * 3);
-  for (let i = 0; i < 8000; i++) {
-    const phi = Math.acos(2 * Math.random() - 1);
-    const theta = Math.random() * Math.PI * 2;
-    const r = 800;
-    starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-    starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-    starPositions[i * 3 + 2] = r * Math.cos(phi);
-  }
-  const starGeometry = new THREE.BufferGeometry();
-  starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
-  const stars = new THREE.Points(
-    starGeometry,
-    new THREE.PointsMaterial({ color: 0xffffff, size: 0.7, sizeAttenuation: true })
-  );
+  // transparent purely so the star field can fade in behind the arriving
+  // moon — the grid it came from has no stars of its own.
+  const starsMaterial = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 0.7,
+    sizeAttenuation: true,
+    transparent: true,
+  });
+  const stars = new THREE.Group();
+  for (const patch of getStarPatches()) stars.add(new THREE.Points(patch, starsMaterial));
   scene.add(stars);
 
-  const sunLight = new THREE.DirectionalLight(0xffffff, 1.6);
+  const sunLight = new THREE.DirectionalLight(0xffffff, SUN_INTENSITY);
   scene.add(sunLight);
 
-  const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.015);
-  hemiLight.color.setHSL(0.6, 1, 0.6);
-  hemiLight.groundColor.setHSL(0.095, 1, 0.75);
-  scene.add(hemiLight);
+  // Earthshine, replacing what was a dim HemisphereLight: light from the
+  // Earth, which from the Moon sits in the viewer's own direction — fixed at
+  // +z rather than following the orbiting camera, since that's where Earth
+  // is in this scene. Its intensity tracks the phase (earthshineFromPhase,
+  // set per frame in update()), and the grid's cell shader applies the same
+  // term, so the night side of a given day matches in both views.
+  const earthLight = new THREE.DirectionalLight(earthshineColor(), 0);
+  earthLight.position.set(0, 0, 100);
+  scene.add(earthLight);
 
   let controls: OrbitControls | null = null;
   let moonState: MoonState | null = null;
@@ -152,6 +284,141 @@ export function createMoonDetailView({
   let resetButton: HTMLButtonElement | null = null;
   let locationButton: HTMLButtonElement | null = null;
   let compass: SkyCompass | null = null;
+  // Viewport size, needed to turn the incoming pixel circle into world
+  // units; only known from resize(), which main.js calls right after mount.
+  let viewWidth = 0;
+  let viewHeight = 0;
+  // The grid cell this view was opened from, if any: the moon flies out of
+  // that circle on mount and back into it on "back". Null for every other
+  // route in (nav, URL restore, date picker) and under reduced motion.
+  // Cleared by setDate: once the nav arrows have stepped to another day, the
+  // moon on screen is no longer the one that flew out of that circle, and the
+  // day it *is* now sits in some other cell whose position this view doesn't
+  // know — so "back" goes back to being a plain cut.
+  let cell: MoonOrigin | null =
+    from && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? from : null;
+  // The flight currently running, if any. "in" = arriving from the cell,
+  // "out" = shrinking back onto it, after which onBack() hands over.
+  // `primed` marks that the start pose has actually been presented once:
+  // timing only begins on the frame after that (see advanceFlight).
+  let flight: { dir: "in" | "out"; start: number | null; primed: boolean } | null = cell
+    ? { dir: "in", start: null, primed: false }
+    : null;
+  // Viewport the cell circle was measured in. A later resize relaid the grid
+  // we'd fly back to, so the stored circle no longer points at that cell —
+  // the return flight is dropped rather than aimed at the wrong day.
+  let cellViewWidth = 0;
+  let cellViewHeight = 0;
+  // Where the day currently on screen is coming *from* while a nav-arrow
+  // step eases across; null whenever the sky is simply the state it says.
+  let stepFrom: MoonState | null = null;
+  let stepStart = 0;
+  // Rebuilt every frame in update(); kept here so the loop allocates nothing.
+  const roll = new THREE.Quaternion();
+  const moonEuler = new THREE.Euler();
+
+  // The world-space offset and scale that make the moon project onto exactly
+  // the screen circle `origin` describes. Solved on the z = 0 plane the moon
+  // already sits on, so the flight is a pure slide-and-grow within that
+  // plane — no depth change, hence no lighting or perspective surprises.
+  function startPose(origin: MoonOrigin): { x: number; y: number; scale: number } | null {
+    if (!viewWidth || !viewHeight) return null;
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * CAMERA_DEFAULT_DISTANCE;
+    const halfWidth = halfHeight * camera.aspect;
+    return {
+      x: ((origin.x / viewWidth) * 2 - 1) * halfWidth,
+      y: -((origin.y / viewHeight) * 2 - 1) * halfHeight,
+      scale: ((origin.radius / (viewHeight / 2)) * halfHeight) / SILHOUETTE_RADIUS,
+    };
+  }
+
+  // How far into this view's own framing the moon is: 0 = sitting on the grid
+  // cell, 1 = fully in place — which is also what this returns whenever
+  // there's no flight to run, so callers need no special case. A flight
+  // starts on its first frame rather than when armed, because the pose
+  // depends on the camera aspect/fov that resize() settles after mount.
+  function advanceFlight(): number {
+    if (!flight || !cell) return 1;
+    const pose = startPose(cell);
+    if (!pose) {
+      // No laid-out viewport to solve against — never the case in practice,
+      // since main.js resizes straight after mount. Treat the flight as
+      // already over rather than parking the moon off-frame, or, on the way
+      // out, swallowing the back press entirely.
+      const outbound = flight.dir === "out";
+      settleFlight(1);
+      if (outbound) queueMicrotask(() => onBack?.());
+      return 1;
+    }
+    if (!flight.primed) {
+      // Present the start pose and begin timing on the *next* frame. Mounting
+      // this view costs the first render a shader compile and a texture
+      // upload — a couple of hundred milliseconds — and counting that as
+      // elapsed animation time made the moon skip ~85% of the way in its
+      // first visible step instead of flying there.
+      flight.primed = true;
+      const from = flight.dir === "in" ? 0 : 1;
+      applyFlightPose(pose, from);
+      return from;
+    }
+    if (flight.start === null) flight.start = performance.now();
+    const t = Math.min(1, (performance.now() - flight.start) / TRANSITION_MS);
+    // Arriving eases out: it answers a click, so it starts at full tilt and
+    // settles into place. Leaving eases in *and* out — the moon is at rest on
+    // screen when "back" is pressed, and an ease-out there let it leap away
+    // at maximum speed in the first frame, which read as a jolt.
+    const eased = flight.dir === "in" ? easeOutCubic(t) : easeInOutCubic(t);
+    const arrived = flight.dir === "in" ? eased : 1 - eased;
+    applyFlightPose(pose, arrived);
+    if (t >= 1) {
+      const outbound = flight.dir === "out";
+      settleFlight(arrived);
+      // Deferred a task: this runs inside the animation loop's update(), and
+      // onBack() disposes this very view — let the frame it's in finish
+      // rendering the handover pose first.
+      if (outbound) queueMicrotask(() => onBack?.());
+    }
+    return arrived;
+  }
+
+  // 0 = the moon sits on the grid cell, 1 = it's in this view's own framing;
+  // everything the grid has no counterpart for fades with it.
+  function applyFlightPose(pose: { x: number; y: number; scale: number }, arrived: number) {
+    moon.position.set(pose.x * (1 - arrived), pose.y * (1 - arrived), 0);
+    moon.scale.setScalar(1 + (pose.scale - 1) * (1 - arrived));
+    starsMaterial.opacity = arrived;
+    if (hud) hud.style.opacity = `${arrived}`;
+    if (backButton) backButton.style.opacity = `${arrived}`;
+  }
+
+  function settleFlight(arrived: number) {
+    flight = null;
+    if (arrived < 1) return; // left on the cell, about to be disposed
+    moon.position.set(0, 0, 0);
+    moon.scale.setScalar(1);
+    starsMaterial.opacity = 1;
+    if (hud) hud.style.opacity = "";
+    if (backButton) backButton.style.opacity = "";
+    // Held off until now: a flight moves the moon, not the camera, so an
+    // orbit mid-flight would fight it.
+    if (controls) controls.enabled = true;
+  }
+
+  // Reverse of the arrival: shrink back onto the cell, then let onBack() mount
+  // the grid, where that same cell is drawn exactly where the moon stopped
+  // (main.js restores the grid's pan for that reason). Returns false — so
+  // "back" is an immediate cut, as it always was — when there's no cell to
+  // return to, a flight is already running, the viewport has been resized
+  // since (the grid will have relaid out), or the user has orbited/zoomed,
+  // which the pose math has no way to fly back from.
+  function startReturnFlight(): boolean {
+    if (!cell || flight) return false;
+    if (viewWidth !== cellViewWidth || viewHeight !== cellViewHeight) return false;
+    if (camera.position.distanceTo(DEFAULT_CAMERA_POSITION) > CAMERA_MOVED_EPSILON) return false;
+    if (controls) controls.enabled = false;
+    flight = { dir: "out", start: null, primed: false };
+    return true;
+  }
 
   // Keeps back/reset from colliding with the icon cluster when it's been
   // pushed below the nav (see the comment on getTopInset above) — a no-op
@@ -183,16 +450,10 @@ export function createMoonDetailView({
     }
   }
 
-  function applyMoonState(state: MoonState) {
-    moonState = state;
-    const sunDir = sunDirFromPhase(state.phase);
-    sunLight.position.copy(sunDir).multiplyScalar(100);
-  }
-
   function refresh() {
     const at = live ? new Date() : date!;
-    applyMoonState(computeMoonState(at, location.coords));
-    const current = moonState!;
+    moonState = computeMoonState(at, location.coords);
+    const current = moonState;
 
     const phaseLine = `${getPhaseName(current.phase)} · ${current.illuminatedPercent}% illuminated`;
     const lines = [phaseLine];
@@ -282,7 +543,11 @@ export function createMoonDetailView({
         backButton = document.createElement("button");
         backButton.className = "back-button";
         backButton.textContent = backLabel;
-        backButton.addEventListener("click", onBack);
+        // The return flight calls onBack itself once the moon is back on its
+        // cell; a refusal (see startReturnFlight) means go straight back.
+        backButton.addEventListener("click", () => {
+          if (!startReturnFlight()) onBack();
+        });
         root.appendChild(backButton);
       }
 
@@ -304,6 +569,13 @@ export function createMoonDetailView({
       controls.minDistance = MIN_ZOOM_DISTANCE;
       controls.maxDistance = MAX_ZOOM_DISTANCE;
 
+      if (flight) {
+        controls.enabled = false;
+        starsMaterial.opacity = 0;
+        hud.style.opacity = "0";
+        if (backButton) backButton.style.opacity = "0";
+      }
+
       refresh();
       if (live) {
         startTicking();
@@ -313,15 +585,48 @@ export function createMoonDetailView({
 
     update() {
       const current = moonState!;
-      moon.rotation.y = BASE_ROTATION_Y + current.libLonRad;
-      moon.rotation.x = BASE_ROTATION_X + current.libLatRad;
-      moon.rotation.z = current.parallacticAngle;
+      const arrived = advanceFlight();
+
+      // Mid-step, the sky shown is somewhere between the day we were on and
+      // the day stepped to; with no step running these are just `current`.
+      const step = stepFrom ? easeInOutCubic(Math.min(1, (performance.now() - stepStart) / STEP_MS)) : 1;
+      const phase = stepFrom ? blendCycle(stepFrom.phase, current.phase, step, 1) : current.phase;
+      const libLon = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLonRad, current.libLonRad, step) : current.libLonRad;
+      const libLat = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLatRad, current.libLatRad, step) : current.libLatRad;
+      const tilt = stepFrom
+        ? blendCycle(stepFrom.parallacticAngle, current.parallacticAngle, step, Math.PI * 2)
+        : current.parallacticAngle;
+      if (step >= 1) stepFrom = null;
+
+      // Negated: the parallactic angle is the position angle of the zenith
+      // measured from the celestial pole counter-clockwise, and the moon is
+      // drawn pole-up, so putting the zenith upright turns the disc the other
+      // way — a waxing crescent low in the west ends up smiling at a sun that
+      // has already set, rather than lit from the side.
+      roll.setFromAxisAngle(VIEW_AXIS, -tilt * arrived);
+
+      // The one place the lighting is applied, so a blended phase and a plain
+      // one can't diverge. The sun is rolled with the moon so the terminator
+      // turns with the surface; earthshine sits on the view axis itself and
+      // the roll leaves it where it is.
+      sunLight.position.copy(sunDirFromPhase(phase)).applyQuaternion(roll).multiplyScalar(100);
+      earthLight.intensity = earthshineFromPhase(phase);
+
+      // Libration is applied outright: the grid's cells carry the same
+      // date's libration, so the arriving moon is already oriented like the
+      // one that was clicked (easing it in from zero, as this used to, made
+      // the moon visibly tip as it flew). The parallactic roll has no
+      // counterpart in the grid — it depends on the observer's horizon,
+      // which a calendar cell knows nothing about — so that one still eases
+      // in over the flight, and is simply 0 until location is granted.
+      moonEuler.set(BASE_ROTATION_X + libLat, BASE_ROTATION_Y + libLon, 0);
+      moon.quaternion.setFromEuler(moonEuler).premultiply(roll);
       controls!.update();
 
       // Covers rotation and zoom in one check — any real difference from
       // the default camera position (direction or distance) means there's
       // something for "Reset view" to reset.
-      const moved = camera.position.distanceTo(DEFAULT_CAMERA_POSITION) > 0.01;
+      const moved = camera.position.distanceTo(DEFAULT_CAMERA_POSITION) > CAMERA_MOVED_EPSILON;
       if (resetButton) resetButton.hidden = !moved;
 
       // Redrawn per frame; the Moon's own position moves about a quarter of
@@ -338,10 +643,40 @@ export function createMoonDetailView({
     },
 
     resize(width, height) {
+      viewWidth = width;
+      viewHeight = height;
+      // First layout after mount — the viewport the incoming cell circle was
+      // measured in (main.js resizes straight after mount).
+      if (!cellViewWidth) {
+        cellViewWidth = width;
+        cellViewHeight = height;
+      }
       camera.aspect = width / height;
       camera.fov = computeFov(camera.aspect);
       camera.updateProjectionMatrix();
       applyChromeInset();
+    },
+
+    // Called by main.js when the nav arrows step a day while this view stays
+    // mounted: recompute for the new date and ease across to it (see STEP_MS)
+    // instead of tearing the view down and building another one, which cut
+    // between two skies — and rebuilt the star field underneath.
+    setDate(next: Date) {
+      // Any flight in progress was aimed at the day we're leaving: land it
+      // (rather than abandoning the moon mid-slide) and give up the cell.
+      if (flight) settleFlight(1);
+      cell = null;
+      date = next;
+      const previous = moonState;
+      refresh();
+      stepFrom = previous && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? previous : null;
+      stepStart = performance.now();
+    },
+
+    // Called by main.js when a day step moves where "back" would land — the
+    // button names its destination, so the name has to follow it.
+    setBackLabel(text: string) {
+      if (backButton) backButton.textContent = text;
     },
 
     // Called by main.js when geolocation resolves after this view already
@@ -361,8 +696,9 @@ export function createMoonDetailView({
       if (resetButton) resetButton.remove();
       moon.geometry.dispose();
       moon.material.dispose();
-      starGeometry.dispose();
-      stars.material.dispose();
+      // The star geometry is shared across views (getStarPatches) — only
+      // this view's material is ours to dispose.
+      starsMaterial.dispose();
     },
   };
 }

@@ -4,13 +4,13 @@ import * as THREE from "three";
 import { MONTH_NAMES } from "./astronomy.js";
 import { createMoonDetailView } from "./moon-detail.js";
 import { createMoonGridView } from "./moon-grid.js";
-import { getColorMap, onColorMapReady } from "./textures.js";
+import { getColorMap, getDisplacementMap, onColorMapReady } from "./textures.js";
 import { createLocationState } from "./location.js";
 import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
 import { createDatePicker } from "./date-picker.js";
-import type { AppState, AppView, ViewInstance } from "./types.js";
+import type { AppState, AppView, GridPan, MoonOrigin, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
 const renderer = new THREE.WebGLRenderer({ canvas });
@@ -28,6 +28,12 @@ viewContainer.id = "view-overlay";
 // and cover the gap with a loading indicator instead of a flash of
 // default-gray moon on a slow connection.
 getColorMap();
+// The displacement map is only used by the detail view, so it used to start
+// downloading at the exact moment a day was opened — i.e. during the flight
+// out of the calendar cell, which is the one moment that needs a steady frame
+// rate. Kicked off here instead; the loading overlay below still waits only
+// on the (visually dominant) color map.
+getDisplacementMap();
 const loadingOverlay = document.createElement("div");
 loadingOverlay.id = "loading-overlay";
 loadingOverlay.textContent = "Loading the Moon…";
@@ -68,6 +74,17 @@ const state: AppState = {
 };
 
 let activeView: ViewInstance | null = null;
+// Set by goToDetail when the user picked a moon off the calendar, and read
+// (once) by the next setView — that's the screen circle the detail view
+// flies its moon out of. Deliberately not part of AppState: it describes one
+// navigation gesture, not restorable app state, so a URL restore or a date
+// step lands with a plain cut.
+let pendingOrigin: MoonOrigin | null = null;
+// Where the grid we left was panned when a detail view was opened from it,
+// tagged with which grid that was. Restoring it means "back" returns to the
+// part of the calendar the user was actually looking at — and it's what makes
+// the detail view's return flight land on the very cell it flew out of.
+let returnPan: (GridPan & { view: AppView; year: number; month: number }) | null = null;
 
 const nav = document.createElement("nav");
 nav.id = "app-nav";
@@ -167,8 +184,36 @@ function stepNav(delta: number) {
     const next = new Date(state.detailDate!);
     next.setDate(next.getDate() + delta);
     state.detailDate = next;
+    // "Back" names a calendar, not the day we arrived from: once a step has
+    // carried us into another month (or year), that's the calendar the day
+    // on screen lives in, and the one back has to return to.
+    if (state.returnTo && state.returnTo.view !== "today") {
+      state.returnTo = {
+        view: state.returnTo.view,
+        year: next.getFullYear(),
+        month: next.getMonth(),
+      };
+    }
+    // The view already on screen can ease across to the new day itself;
+    // rebuilding it would cut between two skies. Only its chrome (the date
+    // label, and the icon cluster the label's width can displace) and the
+    // URL still need updating — the tail of setView, minus the view swap.
+    if (activeView?.setDate) {
+      activeView.setDate(next);
+      activeView.setBackLabel?.(backLabel());
+      syncDetailLabel();
+      chrome.layoutChromeButtons();
+      activeView.resize(window.innerWidth, window.innerHeight);
+      syncUrl(state);
+      return;
+    }
   }
   setView(state.view);
+}
+
+function syncDetailLabel() {
+  gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate!);
+  document.title = `${gridLabel.textContent} · Moon`;
 }
 
 function backLabel(): string {
@@ -179,7 +224,10 @@ function backLabel(): string {
   return `← Back to ${MONTH_NAMES[r.month]} ${r.year}`;
 }
 
-function goToDetail(date: Date) {
+function goToDetail(date: Date, origin: MoonOrigin | null = null) {
+  pendingOrigin = origin;
+  const pan = activeView?.getPan?.() ?? null;
+  returnPan = pan ? { ...pan, view: state.view, year: state.year, month: state.month } : null;
   state.returnTo = { view: state.view, year: state.year, month: state.month };
   state.detailDate = date;
   setView("detail");
@@ -198,6 +246,8 @@ const chrome = createChromeButtons({
 document.body.appendChild(viewContainer);
 
 function setView(kind: AppView) {
+  const from = pendingOrigin;
+  pendingOrigin = null;
   if (activeView) {
     activeView.dispose();
     activeView = null;
@@ -247,16 +297,31 @@ function setView(kind: AppView) {
       showRings: chrome.getShowRings(),
       getTopInset: chrome.getTopInset,
       calendarMode: kind === "month" && chrome.getCalendarMode(),
+      initialPan:
+        returnPan && returnPan.view === kind && returnPan.year === state.year && returnPan.month === state.month
+          ? { x: returnPan.x, y: returnPan.y }
+          : null,
     });
   } else if (kind === "detail") {
     gridNav.hidden = false;
-    gridLabel.textContent = NAV_DATE_FORMAT.format(state.detailDate!);
-    document.title = `${gridLabel.textContent} · Moon`;
+    syncDetailLabel();
     activeView = createMoonDetailView({
       date: state.detailDate,
       location,
       live: false,
-      onBack: () => setView(state.returnTo!.view),
+      from,
+      onBack: () => {
+        // returnTo is the one record of where back goes — a day step can have
+        // moved it to another month since this view mounted, so the grid
+        // coordinates come from there rather than from whatever state.year /
+        // state.month were left holding.
+        const r = state.returnTo!;
+        if (r.view !== "today") {
+          state.year = r.year;
+          state.month = r.month;
+        }
+        setView(r.view);
+      },
       backLabel: backLabel(),
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,

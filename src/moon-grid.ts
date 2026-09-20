@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { computeMoonVisual, daysInMonth, localNoon, getPhaseName, MONTH_NAMES } from "./astronomy.js";
 import { getColorMap } from "./textures.js";
 import { createMoonCellMaterial } from "./moon-shader.js";
-import type { ViewInstance } from "./types.js";
+import type { GridPan, MoonOrigin, ViewInstance } from "./types.js";
 
 const SPACING = 2.4;
 const CELL_RADIUS = 0.85;
@@ -223,7 +223,9 @@ function distToFull(phase: number): number {
 export interface MoonGridViewOptions {
   year: number;
   months: number[];
-  onSelectDate: (date: Date) => void;
+  // `origin` is where the selected cell sits on screen right now, so the
+  // detail view can fly that same moon into place instead of cutting to it.
+  onSelectDate: (date: Date, origin?: MoonOrigin) => void;
   announce?: (text: string) => void;
   showRings?: boolean;
   getTopInset?: () => number;
@@ -231,6 +233,11 @@ export interface MoonGridViewOptions {
   // one continuous day-of-month strip. Only meaningful for a single month
   // (months.length === 1) — the year view always uses the strip layout.
   calendarMode?: boolean;
+  // Pan offset to open at (from a previous mount of the same grid, via
+  // main.js) instead of the top-left default — how coming back from a detail
+  // view returns to the part of the calendar the user was actually looking
+  // at. Ignored when the grid fits on screen without panning.
+  initialPan?: GridPan | null;
 }
 
 // months: array of 0-based month indices — [m] for a single month, [0..11]
@@ -246,6 +253,7 @@ export function createMoonGridView({
   showRings = false,
   getTopInset = () => 0,
   calendarMode = false,
+  initialPan = null,
 }: MoonGridViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
@@ -308,8 +316,11 @@ export function createMoonGridView({
 
       const material = createMoonCellMaterial(getColorMap(), visual.phase);
       const mesh = new THREE.Mesh(getCellGeometry(), material);
-      mesh.rotation.x = BASE_ROTATION_X;
-      mesh.rotation.y = BASE_ROTATION_Y;
+      // The date's real libration (the Moon's ±7° nod), the same as the
+      // detail view applies — without it, opening a day tipped the moon
+      // slightly as the flight handed over.
+      mesh.rotation.x = BASE_ROTATION_X + visual.libLatRad;
+      mesh.rotation.y = BASE_ROTATION_Y + visual.libLonRad;
       mesh.userData.date = date;
       mesh.userData.day = day;
       mesh.userData.row = row;
@@ -574,6 +585,10 @@ export function createMoonGridView({
   let frustumH = 1;
   let panX = 0;
   let panY = 0;
+  // Consumed by the first pan-mode resize() only: a later one (an actual
+  // window resize, or a transpose) has relaid the grid, so the remembered
+  // offset no longer means what it did and the default applies again.
+  let pendingInitialPan = initialPan;
   // How much world space, at the current zoom, corresponds to the fixed
   // nav/icon cluster floating over the canvas — recomputed every resize()
   // from getTopInset() (a live pixel measurement owned by main.js). Baked
@@ -659,13 +674,30 @@ export function createMoonGridView({
     setTimeout(() => el.remove(), 400);
   }
 
+  // Screen circle a cell occupies, in CSS pixels. Derived from the pan/zoom
+  // state rather than camera.project() because those values are already the
+  // world→pixel mapping the rest of the view runs on. The radius is the
+  // layout one, deliberately not the mesh's live CELL_ACTIVE_SCALE-boosted
+  // scale: it's also the circle the detail view flies *back* to, and the
+  // cell it lands on then is drawn unhighlighted.
+  function originFor(mesh: THREE.Mesh): MoonOrigin {
+    return {
+      x: (mesh.position.x - (panX - frustumW / 2)) * pxPerWorldUnit,
+      y: (panY + frustumH / 2 - mesh.position.y) * pxPerWorldUnit,
+      radius: CELL_RADIUS * cellScale * pxPerWorldUnit,
+    };
+  }
+
   function selectAt(clientX: number, clientY: number) {
     const rect = canvas!.getBoundingClientRect();
     pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointer, camera);
     const hit = raycaster.intersectObjects(cellMeshes, false)[0];
-    if (hit) onSelectDate(hit.object.userData.date);
+    if (hit) {
+      const mesh = hit.object as THREE.Mesh;
+      onSelectDate(mesh.userData.date, originFor(mesh));
+    }
   }
 
   let dragPointerId: number | null = null;
@@ -792,7 +824,7 @@ export function createMoonGridView({
       case "Enter":
       case " ": {
         const mesh = focusedCell && cellMeshByKey.get(cellKey(focusedCell)!);
-        if (mesh) onSelectDate(mesh.userData.date);
+        if (mesh) onSelectDate(mesh.userData.date, originFor(mesh));
         event.preventDefault();
         break;
       }
@@ -899,17 +931,23 @@ export function createMoonGridView({
         pxPerWorldUnit = targetPxPerWorldUnit;
         topInsetWorld = getTopInset() / pxPerWorldUnit;
         if (!panInitialized) {
-          // Start at the top-left (day 1 / first month), the natural
-          // reading start, rather than centered on the whole grid.
+          // Start where we were told to (coming back from a detail view), or
+          // else at the top-left (day 1 / first month), the natural reading
+          // start, rather than centered on the whole grid.
           const b = panBounds();
-          panX = b.minX;
-          panY = b.maxY;
+          panX = pendingInitialPan ? pendingInitialPan.x : b.minX;
+          panY = pendingInitialPan ? pendingInitialPan.y : b.maxY;
+          pendingInitialPan = null;
         }
         clampPan();
       }
       panInitialized = true;
       applyCamera();
       if (panEnabled) showPanHint();
+    },
+
+    getPan() {
+      return panEnabled ? { x: panX, y: panY } : null;
     },
 
     // Called by main.js when the user flips the rings toggle while this
