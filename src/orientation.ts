@@ -40,6 +40,9 @@ export interface OrientationState {
   direction: DeviceDirection | null;
   status: OrientationStatus;
   active: boolean;
+  // iOS only: readings are arriving, but north isn't known yet (see
+  // createNorthCalibration) — the phone has to be held flatter for a moment.
+  awaitingNorth: boolean;
 }
 
 // Android fires this one with a north-referenced `alpha`; plain
@@ -138,17 +141,34 @@ export function screenOffset(view: DeviceDirection, azimuth: number, altitude: n
   };
 }
 
-// Heading runs clockwise from north and alpha counter-clockwise, so
-// 360 - heading converts iOS's reading into the angle the matrix above
-// expects. Null means this event carries no compass bearing at all.
-function earthReferencedAlpha(event: CompassOrientationEvent, fromAbsoluteEvent: boolean): number | null {
-  if (typeof event.webkitCompassHeading === "number" && !Number.isNaN(event.webkitCompassHeading)) {
-    return (360 - event.webkitCompassHeading) % 360;
-  }
-  if ((fromAbsoluteEvent || event.absolute) && typeof event.alpha === "number") {
-    return event.alpha;
-  }
-  return null;
+// Past this much tilt from flat, the top edge points too steeply for its
+// heading to be trusted (see createNorthCalibration).
+const CALIBRATION_MAX_TILT = 60;
+// How far each trusted reading pulls the learned offset: slow, since the
+// offset should barely move, and one bad reading shouldn't swing it.
+const CALIBRATION_SMOOTHING = 0.05;
+
+// iOS gives two readings that don't agree. Its `alpha` is consistent with
+// beta and gamma but zeroed wherever the phone faced when the listener
+// attached. webkitCompassHeading knows north, but it's the heading of the
+// phone's top edge: tip the phone back past upright — exactly how you aim it
+// above the horizon — and that edge's direction along the ground flips half a
+// turn, while right at upright it's mostly noise. Using the heading as alpha
+// (as this once did) swung the whole dial round the moment the phone pointed
+// up. So alpha stays the reading, and the heading only supplies its offset
+// from north, learned while the phone is flat enough for the top edge to
+// point somewhere definite. Flat, that edge's heading is exactly 360 - alpha
+// whatever the roll, since gamma turns the phone about that very edge.
+// Returns the north-referenced alpha, or null until the first trusted reading.
+export function createNorthCalibration(): (alpha: number, beta: number, heading: number) => number | null {
+  let offset: number | null = null;
+  return (alpha, beta, heading) => {
+    if (Math.abs(beta) < CALIBRATION_MAX_TILT) {
+      const sample = angleDelta(alpha, 360 - heading);
+      offset = offset === null ? sample : offset + angleDelta(offset, sample) * CALIBRATION_SMOOTHING;
+    }
+    return offset === null ? null : (((alpha + offset) % 360) + 360) % 360;
+  };
 }
 
 function orientationSupported(): boolean {
@@ -179,22 +199,44 @@ export function createOrientationState(): {
     direction: null,
     status: orientationSupported() ? "idle" : "unsupported",
     active: false,
+    awaitingNorth: false,
   };
 
   let notify: (() => void) | undefined;
   let readingTimer: ReturnType<typeof setTimeout> | null = null;
   let listening = false;
+  // Rebuilt on every attach: iOS re-zeroes its alpha each time.
+  let calibrateNorth = createNorthCalibration();
+
+  // Heading runs clockwise from north and alpha counter-clockwise. Null
+  // means this event carries no usable compass bearing (yet).
+  function earthReferencedAlpha(event: CompassOrientationEvent, fromAbsoluteEvent: boolean): number | null {
+    const heading = event.webkitCompassHeading;
+    if (typeof heading === "number" && heading >= 0 && typeof event.alpha === "number" && event.beta !== null) {
+      const alpha = calibrateNorth(event.alpha, event.beta, heading);
+      orientation.awaitingNorth = alpha === null;
+      return alpha;
+    }
+    if ((fromAbsoluteEvent || event.absolute) && typeof event.alpha === "number") {
+      return event.alpha;
+    }
+    return null;
+  }
 
   function handleEvent(event: Event, fromAbsoluteEvent: boolean) {
     const reading = event as CompassOrientationEvent;
     const alpha = earthReferencedAlpha(reading, fromAbsoluteEvent);
-    if (alpha === null || reading.beta === null || reading.gamma === null) return;
+    if (reading.beta === null || reading.gamma === null) return;
+    // A compass waiting on calibration is still a compass: without this, a
+    // phone already held upright when tapped would be written off as having
+    // no sensor at all when the no-reading timer ran out.
+    if (alpha === null && !orientation.awaitingNorth) return;
 
     if (readingTimer !== null) {
       clearTimeout(readingTimer);
       readingTimer = null;
     }
-    orientation.direction = deviceDirection(alpha, reading.beta, reading.gamma);
+    orientation.direction = alpha === null ? null : deviceDirection(alpha, reading.beta, reading.gamma);
     if (orientation.status !== "granted") {
       orientation.status = "granted";
       notify?.();
@@ -207,6 +249,8 @@ export function createOrientationState(): {
   function attach() {
     if (listening) return;
     listening = true;
+    calibrateNorth = createNorthCalibration();
+    orientation.awaitingNorth = false;
     window.addEventListener(ABSOLUTE_EVENT, onAbsolute);
     window.addEventListener("deviceorientation", onRelative);
     readingTimer = setTimeout(() => {
@@ -285,6 +329,7 @@ export function createOrientationState(): {
     detach();
     orientation.active = false;
     orientation.direction = null;
+    orientation.awaitingNorth = false;
   }
 
   return { orientation, requestOrientation, stopOrientation };
