@@ -151,16 +151,7 @@ body.no-webgl #page-intro h1 {
   pointer-events: auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: min(320px, calc(100vw - 48px));
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.time-control output {
-  flex: none;
-  min-width: 9ch;
-  text-align: right;
+  width: min(280px, calc(100vw - 48px));
 }
 /* Drawn by hand rather than with accent-color, whose filled track outshone
    the Moon: a hairline and a small dot, brightening only while in use.

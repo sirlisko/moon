@@ -323,7 +323,6 @@ export function createMoonDetailView({
   let resetButton: HTMLButtonElement | null = null;
   let locationButton: HTMLButtonElement | null = null;
   let timeInput: HTMLInputElement | null = null;
-  let timeOutput: HTMLOutputElement | null = null;
   let pickedTime = time;
   // Whether anything drawn has changed since update() last reported, beyond
   // what update() can see running itself (a flight, a step, the camera).
@@ -520,23 +519,18 @@ export function createMoonDetailView({
     const current = moonState;
     dirty = true;
 
-    if (timeInput && timeOutput) {
+    const timeText = TIME_FORMAT.format(at);
+    if (timeInput) {
       timeInput.value = String(at.getHours() * 60 + at.getMinutes());
-      const text = TIME_FORMAT.format(at);
-      timeInput.setAttribute("aria-valuetext", moment.highest ? `${text}, Moon at its highest` : text);
-      timeOutput.textContent = moment.highest ? `${text} · highest` : text;
+      timeInput.setAttribute("aria-valuetext", moment.highest ? `${timeText}, Moon at its highest` : timeText);
     }
 
     const phaseLine = `${getPhaseName(current.phase)} · ${current.illuminatedPercent}% illuminated`;
     const lines = [phaseLine, describeNextPhase(at, live)];
+    // The line naming the time shown goes last, right above the slider that
+    // sets it — the slider has no readout of its own.
+    const highest = moment.highest ? " · highest" : "";
     if (current.horizon) {
-      const alt = current.horizon.altitude;
-      const when = live ? "now" : `at ${TIME_FORMAT.format(at)}`;
-      lines.push(
-        alt > 0
-          ? `${alt.toFixed(0)}° above ${azimuthToCompass(current.horizon.azimuth)} horizon ${when}`
-          : `below horizon ${when}`
-      );
       if (current.moonrise || current.moonset) {
         // ↑/↓ rather than "Moonrise"/"Moonset" — same info, far less width,
         // which matters a lot once this is stacked 3 lines deep on a phone.
@@ -545,10 +539,17 @@ export function createMoonDetailView({
         const set = current.moonset ? `↓ ${TIME_FORMAT.format(current.moonset)}` : `no set ${day}`;
         lines.push(`${rise} · ${set}`);
       }
-    } else if (location.status === "denied") {
-      lines.push("Location blocked in your browser");
-    } else if (location.status === "unsupported") {
-      lines.push("Location not supported on this browser");
+      const alt = current.horizon.altitude;
+      const when = live ? "now" : `at ${timeText}${highest}`;
+      lines.push(
+        alt > 0
+          ? `${alt.toFixed(0)}° above ${azimuthToCompass(current.horizon.azimuth)} horizon ${when}`
+          : `below horizon ${when}`
+      );
+    } else {
+      if (location.status === "denied") lines.push("Location blocked in your browser");
+      else if (location.status === "unsupported") lines.push("Location not supported on this browser");
+      if (!live) lines.push(`At ${timeText}`);
     }
     // No date line here: the nav's date label already shows it.
     if (label) label.innerHTML = lines.join("<br>");
@@ -620,8 +621,7 @@ export function createMoonDetailView({
         timeInput.max = String(24 * 60 - TIME_STEP);
         timeInput.step = String(TIME_STEP);
         timeInput.setAttribute("aria-label", "Time of day");
-        timeOutput = document.createElement("output");
-        timeControl.append(timeOutput, timeInput);
+        timeControl.append(timeInput);
         hud.appendChild(timeControl);
         // The date hasn't changed, and the slider announces its own value.
         timeInput.addEventListener("input", () => {
