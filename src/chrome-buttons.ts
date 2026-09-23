@@ -16,8 +16,24 @@ export interface ChromeButtons {
   calendarModeButton: HTMLButtonElement;
   layoutChromeButtons: () => void;
   getTopInset: () => number;
+  getIconRow: () => DOMRect | null;
   getShowRings: () => boolean;
   getCalendarMode: () => boolean;
+}
+
+// Storage access throws when the browser blocks site data; the toggles still
+// work then, they just aren't remembered.
+function readSetting(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeSetting(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
 }
 
 export function createChromeButtons({
@@ -26,19 +42,26 @@ export function createChromeButtons({
   onToggleRings,
   onToggleCalendarMode,
 }: ChromeButtonsOptions): ChromeButtons {
-  let showRings = localStorage.getItem(RINGS_STORAGE_KEY) === "1";
-  let calendarMode = localStorage.getItem(CALENDAR_STORAGE_KEY) !== "0";
+  let showRings = readSetting(RINGS_STORAGE_KEY) === "1";
+  let calendarMode = readSetting(CALENDAR_STORAGE_KEY) !== "0";
 
   const chromeButtons = document.createElement("div");
   chromeButtons.id = "chrome-buttons";
   document.body.appendChild(chromeButtons);
 
+  let droppedBelowNav = false;
   function layoutChromeButtons() {
     chromeButtons.style.top = "";
     const navRect = nav.getBoundingClientRect();
     const chromeRect = chromeButtons.getBoundingClientRect();
-    const overlaps = navRect.bottom > chromeRect.top && navRect.right + 8 > chromeRect.left;
-    if (overlaps) chromeButtons.style.top = `${navRect.bottom + 12}px`;
+    droppedBelowNav = navRect.bottom > chromeRect.top && navRect.right + 8 > chromeRect.left;
+    if (droppedBelowNav) chromeButtons.style.top = `${navRect.bottom + 12}px`;
+  }
+
+  // The icon cluster's box while it sits on a row of its own under the nav
+  // (a phone), whose left side is otherwise empty; null when it's beside it.
+  function getIconRow() {
+    return droppedBelowNav ? chromeButtons.getBoundingClientRect() : null;
   }
   window.addEventListener("resize", layoutChromeButtons);
 
@@ -72,7 +95,7 @@ export function createChromeButtons({
 
   ringsButton.addEventListener("click", () => {
     showRings = !showRings;
-    localStorage.setItem(RINGS_STORAGE_KEY, showRings ? "1" : "0");
+    writeSetting(RINGS_STORAGE_KEY, showRings ? "1" : "0");
     ringsButton.classList.toggle("active", showRings);
     ringsButton.setAttribute("aria-pressed", String(showRings));
     ringsButton.title = ringsHint();
@@ -100,7 +123,7 @@ export function createChromeButtons({
 
   calendarModeButton.addEventListener("click", () => {
     calendarMode = !calendarMode;
-    localStorage.setItem(CALENDAR_STORAGE_KEY, calendarMode ? "1" : "0");
+    writeSetting(CALENDAR_STORAGE_KEY, calendarMode ? "1" : "0");
     calendarModeButton.classList.toggle("active", calendarMode);
     calendarModeButton.setAttribute("aria-pressed", String(calendarMode));
     calendarModeButton.title = calendarModeHint();
@@ -217,6 +240,7 @@ export function createChromeButtons({
     calendarModeButton,
     layoutChromeButtons,
     getTopInset,
+    getIconRow,
     getShowRings: () => showRings,
     getCalendarMode: () => calendarMode,
   };

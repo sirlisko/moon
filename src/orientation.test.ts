@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deviceDirection, angleDelta, screenOffset } from "./orientation.js";
+import { deviceDirection, angleDelta, screenOffset, createNorthCalibration } from "./orientation.js";
 
 // The W3C angles are intrinsic Z-X'-Y'': alpha spins the phone about the
 // vertical (counter-clockwise, so a compass heading is 360 - alpha), beta
@@ -250,5 +250,51 @@ describe("angleDelta", () => {
     expect(angleDelta(0, 180)).toBe(-180);
     expect(angleDelta(0, 181)).toBe(-179);
     expect(angleDelta(0, 360)).toBe(0);
+  });
+});
+
+describe("createNorthCalibration", () => {
+  // iOS's two readings for a true attitude: its alpha, zeroed somewhere
+  // arbitrary, and webkitCompassHeading — where the top edge (the device's y
+  // column) points along the ground, which turns half a circle past upright.
+  const IOS_ZERO = 73;
+  function iosReading(alpha: number, beta: number, gamma: number) {
+    const top = column(deviceToEarth(alpha, beta, gamma), 1);
+    return {
+      alpha: (alpha - IOS_ZERO + 360) % 360,
+      heading: (toDeg(Math.atan2(top[0]!, top[1]!)) + 360) % 360,
+    };
+  }
+
+  it("waits for a flat-enough reading before it claims to know north", () => {
+    const calibrate = createNorthCalibration();
+    const upright = iosReading(200, 100, 0);
+    expect(calibrate(upright.alpha, 100, upright.heading)).toBeNull();
+  });
+
+  it("keeps north once the phone tips back past upright to aim at the sky", () => {
+    // The heading-as-alpha approach this replaces pointed the dial the
+    // opposite way from here on.
+    const calibrate = createNorthCalibration();
+    const lifted = iosReading(200, 35, 8);
+    calibrate(lifted.alpha, 35, lifted.heading);
+    for (const [beta, gamma] of [[89, 0], [91, 0], [120, -6], [150, 12]] as const) {
+      const reading = iosReading(200, beta, gamma);
+      const alpha = calibrate(reading.alpha, beta, reading.heading)!;
+      const expected = deviceDirection(200, beta, gamma);
+      const actual = deviceDirection(alpha, beta, gamma);
+      expect(angleDelta(actual.azimuth, expected.azimuth)).toBeCloseTo(0, 6);
+      expect(actual.altitude).toBeCloseTo(expected.altitude, 6);
+    }
+  });
+
+  it("learns the offset across the wrap at north", () => {
+    const calibrate = createNorthCalibration();
+    for (const alpha of [355, 2, 358, 5]) {
+      const reading = iosReading(alpha, 20, 0);
+      calibrate(reading.alpha, 20, reading.heading);
+    }
+    const reading = iosReading(0, 20, 0);
+    expect(angleDelta(calibrate(reading.alpha, 20, reading.heading)!, 0)).toBeCloseTo(0, 6);
   });
 });

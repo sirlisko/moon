@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { MONTH_NAMES } from "./astronomy.js";
 import { createMoonDetailView } from "./moon-detail.js";
 import { createMoonGridView } from "./moon-grid.js";
-import { getColorMap, getDisplacementMap, onColorMapReady } from "./textures.js";
+import { getColorMap, getDisplacementMap, onColorMapReady, onTextureLoad } from "./textures.js";
 import { createLocationState } from "./location.js";
 import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
@@ -13,10 +13,45 @@ import { createDatePicker } from "./date-picker.js";
 import type { AppState, AppView, GridPan, MoonOrigin, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
-const renderer = new THREE.WebGLRenderer({ canvas });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
+const renderer = createRenderer();
+// Past 2× the extra pixels are invisible at arm's length but still cost fill
+// rate — a 3× phone would be drawing 2.25× the pixels of a 2× one.
+const MAX_PIXEL_RATIO = 2;
+function applyRendererSize() {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+applyRendererSize();
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+function createRenderer(): THREE.WebGLRenderer {
+  try {
+    return new THREE.WebGLRenderer({ canvas, antialias: true });
+  } catch (error) {
+    showWebGLUnavailable();
+    throw error;
+  }
+}
+
+// Without WebGL the app has nothing to draw; the page intro (visually hidden
+// for crawlers) is the only content left, so it becomes the page.
+function showWebGLUnavailable() {
+  const intro = document.querySelector<HTMLElement>("#page-intro")!;
+  const note = document.createElement("p");
+  note.className = "webgl-note";
+  note.textContent =
+    "This app draws the Moon with WebGL, which your browser has turned off or doesn't support. Try another browser, or turn on hardware acceleration.";
+  intro.appendChild(note);
+  document.body.classList.add("no-webgl");
+}
+
+// Set by anything outside a view that changes what's on screen (a new view,
+// a resize, a texture arriving); the views report their own changes from
+// update().
+let needsRender = true;
+onTextureLoad(() => {
+  needsRender = true;
+});
 
 // Appended to the body further down, after the nav and icon cluster, so tab
 // order follows the visual order rather than starting on the HUD button.
@@ -55,7 +90,7 @@ function announce(text: string) {
   liveRegion.textContent = text;
 }
 
-const { location, requestLocation } = createLocationState();
+const { location, requestLocation, restoreLocation } = createLocationState();
 const { orientation, requestOrientation, stopOrientation } = createOrientationState();
 
 // The title index.html ships, captured before any view overwrites it. The
@@ -76,6 +111,7 @@ const state: AppState = {
   year: now.getFullYear(),
   month: now.getMonth(),
   detailDate: null,
+  detailTime: null,
   returnTo: null,
 };
 
@@ -112,6 +148,12 @@ const gridLabel = nav.querySelector<HTMLButtonElement>("#grid-label")!;
 const gridPrev = nav.querySelector<HTMLButtonElement>("#grid-prev")!;
 const gridNext = nav.querySelector<HTMLButtonElement>("#grid-next")!;
 const datePicker = createDatePicker();
+
+// The Today label is set when the view mounts; a tab left open overnight
+// would otherwise keep yesterday's date beside today's moon.
+setInterval(() => {
+  if (state.view === "today") gridLabel.textContent = NAV_DATE_FORMAT.format(new Date());
+}, 60_000);
 
 gridLabel.addEventListener("click", () => {
   if (state.view === "month") {
@@ -181,10 +223,11 @@ function stepNav(delta: number) {
     state.year += delta;
   } else if (state.view === "today") {
     // Stepping away from "today" leaves live mode — it becomes a normal
-    // detail view for that date, with "Today" itself as the way back.
+    // detail view for that date, with "Today" itself as the way back. It
+    // keeps the time of day, so the step reads as "same time tomorrow".
     const next = new Date();
     next.setDate(next.getDate() + delta);
-    goToDetail(next);
+    goToDetail(next, null, next.getHours() * 60 + next.getMinutes());
     return;
   } else if (state.view === "detail") {
     const next = new Date(state.detailDate!);
@@ -205,7 +248,7 @@ function stepNav(delta: number) {
     // label, and the icon cluster the label's width can displace) and the
     // URL still need updating — the tail of setView, minus the view swap.
     if (activeView?.setDate) {
-      activeView.setDate(next);
+      activeView.setDate(next, state.detailTime);
       activeView.setBackLabel?.(backLabel());
       syncDetailLabel();
       chrome.layoutChromeButtons();
@@ -230,12 +273,13 @@ function backLabel(): string {
   return `← Back to ${MONTH_NAMES[r.month]} ${r.year}`;
 }
 
-function goToDetail(date: Date, origin: MoonOrigin | null = null) {
+function goToDetail(date: Date, origin: MoonOrigin | null = null, time: number | null = null) {
   pendingOrigin = origin;
   const pan = activeView?.getPan?.() ?? null;
   returnPan = pan ? { ...pan, view: state.view, year: state.year, month: state.month } : null;
   state.returnTo = { view: state.view, year: state.year, month: state.month };
   state.detailDate = date;
+  state.detailTime = time;
   setView("detail");
 }
 
@@ -258,6 +302,7 @@ function setView(kind: AppView) {
     activeView.dispose();
     activeView = null;
   }
+  needsRender = true;
   viewContainer.innerHTML = "";
   state.view = kind;
 
@@ -313,6 +358,11 @@ function setView(kind: AppView) {
     syncDetailLabel();
     activeView = createMoonDetailView({
       date: state.detailDate,
+      time: state.detailTime,
+      onTimeChange: (time) => {
+        state.detailTime = time;
+        syncUrl(state);
+      },
       location,
       live: false,
       from,
@@ -332,6 +382,7 @@ function setView(kind: AppView) {
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
       getTopInset: chrome.getTopInset,
+      getIconRow: chrome.getIconRow,
     });
   }
 
@@ -347,14 +398,34 @@ function setView(kind: AppView) {
 
 function animate() {
   requestAnimationFrame(animate);
-  activeView?.update();
-  activeView?.render(renderer);
+  if (!activeView) return;
+  const changed = activeView.update();
+  if (changed || needsRender) {
+    activeView.render(renderer);
+    needsRender = false;
+  }
 }
 
 setViewFromUrl(state, setView);
 animate();
+// Only asks the browser when it has already said yes on an earlier visit, so
+// a returning visitor isn't made to tap "Use my location" every time.
+restoreLocation(() => activeView?.refreshLocation?.());
 
 window.addEventListener("resize", () => {
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  applyRendererSize();
   activeView?.resize(window.innerWidth, window.innerHeight);
+  needsRender = true;
+});
+
+// ←/→ step a day on the moon views, as the nav arrows do. The grid keeps its
+// own arrow keys (focus movement), and so does any focused control.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (state.view !== "today" && state.view !== "detail") return;
+  if (datePicker.isOpen()) return;
+  if ((e.target as Element).closest("input, textarea, select, [role=dialog]")) return;
+  e.preventDefault();
+  stepNav(e.key === "ArrowLeft" ? -1 : 1);
 });

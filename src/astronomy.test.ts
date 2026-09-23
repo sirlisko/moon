@@ -7,6 +7,8 @@ import {
   computeMoonState,
   daysInMonth,
   localNoon,
+  moonTransit,
+  nextPrincipalPhase,
   MONTH_NAMES,
 } from "./astronomy.js";
 import { Observer, SiderealTime } from "astronomy-engine";
@@ -127,6 +129,49 @@ describe("computeParallacticAngle", () => {
     const lstHours = (((SiderealTime(date) + observer.longitude / 15) % 24) + 24) % 24;
     const angle = computeParallacticAngle(date, observer, lstHours, 30);
     expect(angle).toBeCloseTo(0, 6);
+  });
+});
+
+describe("moonTransit", () => {
+  const london = { lat: 51.5, lon: -0.13 };
+
+  it("finds a transit within the requested local day, with the Moon above the horizon", () => {
+    const day = localNoon(2026, 8, 26);
+    const transit = moonTransit(day, london);
+    expect(transit).not.toBeNull();
+    expect(transit!.getFullYear()).toBe(2026);
+    expect(transit!.getMonth()).toBe(8);
+    expect(transit!.getDate()).toBe(26);
+    const state = computeMoonState(transit!, london);
+    expect(state.horizon!.altitude).toBeGreaterThan(0);
+  });
+
+  it("returns null on the day each month that transit skips", () => {
+    let skipped = 0;
+    for (let d = 1; d <= 30; d++) {
+      if (moonTransit(localNoon(2026, 8, d), { lat: 0, lon: 0 }) === null) skipped++;
+    }
+    expect(skipped).toBe(1);
+  });
+});
+
+describe("nextPrincipalPhase", () => {
+  it("skips quarters and finds the next new or full moon after the date", () => {
+    const from = localNoon(2026, 0, 1);
+    const next = nextPrincipalPhase(from);
+    expect(["new", "full"]).toContain(next.kind);
+    expect(next.time.getTime()).toBeGreaterThan(from.getTime());
+    const phase = computeMoonVisual(next.time).phase;
+    const target = next.kind === "full" ? 0.5 : 0;
+    expect(Math.min(Math.abs(phase - target), 1 - Math.abs(phase - target))).toBeLessThan(0.001);
+  });
+
+  it("is never more than about half a synodic month away", () => {
+    for (let d = 1; d <= 30; d++) {
+      const from = localNoon(2026, 5, d);
+      const days = (nextPrincipalPhase(from).time.getTime() - from.getTime()) / 86400000;
+      expect(days).toBeLessThan(16);
+    }
   });
 });
 
