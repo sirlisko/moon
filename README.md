@@ -9,7 +9,7 @@ A live 3D model of the Moon, showing its real phase and position as seen from yo
 - **Today**: a live 3D moon, using real NASA images, showing today's actual phase and its slight wobble (called libration). If you share your location, it also shows how high the Moon is and which way to look, plus moonrise and moonset times. The crescent even tilts to match what you would really see looking up from where you are.
 - **Point me at the Moon**: on a phone, once you have shared your location, tap “🧭 Point me at the Moon” on the Today view. A small viewfinder shows where the Moon is compared to where the back of your phone is pointing: turn and tilt until the marker sits in the middle and you are looking right at it. It uses the phone's compass, so it reads magnetic north and is good to about 10 degrees — enough to find the Moon, not to aim a telescope. If the Moon is below the horizon, it only tells you which way to turn.
 - **Month / Year**: a calendar grid of every day's moon. Each one is its own lit 3D sphere, not a flat icon. New and full moon days get a small ring marker (off by default, you can turn it on). Click any day, or use Tab, arrow keys, and Enter, to open it.
-- **Any date**: click a calendar day, or use the ‹ › buttons on any view, to see the Moon as it looked, or will look, on that date, from your location.
+- **Any date**: click a calendar day, or use the ‹ › buttons on any view, to see the Moon as it looked, or will look, on that date, from your location. It opens at the Moon's highest point that day (or 9 PM without a location), and a slider picks any other time. The ← and → keys step a day.
 
 <img src="docs/screenshot-compass.png" alt="Point me at the Moon, on a phone" width="320">
 

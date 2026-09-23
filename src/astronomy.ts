@@ -8,6 +8,9 @@ import {
   Horizon,
   SiderealTime,
   SearchRiseSet,
+  SearchHourAngle,
+  SearchMoonQuarter,
+  NextMoonQuarter,
   HorizontalCoordinates,
 } from "astronomy-engine";
 
@@ -129,6 +132,32 @@ export function computeMoonState(
   }
 
   return { ...visual, parallacticAngle, horizon, moonrise, moonset };
+}
+
+// When the Moon crosses the meridian — its highest point, so the best moment
+// to look — during date's local calendar day. Null on the day each month that
+// transit skips (it drifts ~50 minutes later daily), or when even the highest
+// point stays below the horizon, as it can at high latitudes.
+export function moonTransit(date: Date, observerCoords: ObserverCoords): Date | null {
+  const observer = new Observer(observerCoords.lat, observerCoords.lon, 0);
+  const start = localMidnight(date);
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  const event = SearchHourAngle(Body.Moon, observer, 0, start, +1);
+  if (event.time.date >= end || event.hor.altitude <= 0) return null;
+  return event.time.date;
+}
+
+export interface PrincipalPhase {
+  kind: "new" | "full";
+  time: Date;
+}
+
+// The first new or full moon after `date`. Quarters are skipped: they're
+// what the phase name already says, not something anyone waits for.
+export function nextPrincipalPhase(date: Date): PrincipalPhase {
+  let quarter = SearchMoonQuarter(date);
+  while (quarter.quarter !== 0 && quarter.quarter !== 2) quarter = NextMoonQuarter(quarter);
+  return { kind: quarter.quarter === 0 ? "new" : "full", time: quarter.time.date };
 }
 
 export function daysInMonth(year: number, month0: number): number {

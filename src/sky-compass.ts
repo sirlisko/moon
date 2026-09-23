@@ -20,7 +20,10 @@ const MARKER_INSET_PX = 14;
 const DEGREES_AT_RIM = 45;
 const ALIGNED_DEGREES = 8;
 // Phone magnetometers are noisy; without this the marker visibly shivers.
+// Time-based, so a 120Hz screen doesn't smooth twice as fast as a 60Hz one:
+// the share of the gap closed per 60th of a second.
 const SMOOTHING = 0.18;
+const SMOOTHING_FRAME_MS = 1000 / 60;
 
 export interface SkyTarget {
   azimuth: number;
@@ -57,6 +60,7 @@ export function createSkyCompass({
   let smoothAzimuth: number | null = null;
   let smoothAltitude = 0;
   let smoothRoll = 0;
+  let lastUpdate = 0;
   let wasAligned = false;
 
   const button = document.createElement("button");
@@ -136,9 +140,16 @@ export function createSkyCompass({
 
     const direction = orientation.direction;
     if (!direction || !target) {
-      hint.textContent = direction ? "" : "Waving the phone in a figure-8 helps it calibrate";
+      if (direction) hint.textContent = "";
+      else if (orientation.awaitingNorth) hint.textContent = "Lower the phone for a moment to find north";
+      else hint.textContent = "Waving the phone in a figure-8 helps it calibrate";
+      smoothAzimuth = null;
       return;
     }
+
+    const now = performance.now();
+    const pull = 1 - Math.pow(1 - SMOOTHING, Math.min(now - lastUpdate, 250) / SMOOTHING_FRAME_MS);
+    lastUpdate = now;
 
     // Smoothed the short way round, so the dial doesn't spin most of a turn
     // when the reading crosses north.
@@ -147,9 +158,9 @@ export function createSkyCompass({
       smoothAltitude = direction.altitude;
       smoothRoll = direction.roll;
     } else {
-      smoothAzimuth = (smoothAzimuth + angleDelta(smoothAzimuth, direction.azimuth) * SMOOTHING + 360) % 360;
-      smoothAltitude += (direction.altitude - smoothAltitude) * SMOOTHING;
-      smoothRoll = (smoothRoll + angleDelta(smoothRoll, direction.roll) * SMOOTHING + 360) % 360;
+      smoothAzimuth = (smoothAzimuth + angleDelta(smoothAzimuth, direction.azimuth) * pull + 360) % 360;
+      smoothAltitude += (direction.altitude - smoothAltitude) * pull;
+      smoothRoll = (smoothRoll + angleDelta(smoothRoll, direction.roll) * pull + 360) % 360;
     }
 
     // Vertical offsets are measured against the phone's own pitch, so they

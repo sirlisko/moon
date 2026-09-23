@@ -23,6 +23,7 @@ export interface OpenDatePickerOptions {
 export interface DatePicker {
   open: (options: OpenDatePickerOptions) => void;
   close: () => void;
+  isOpen: () => boolean;
 }
 
 function sameYMD(a: Date, y: number, m: number, d: number): boolean {
@@ -226,5 +227,5 @@ export function createDatePicker(): DatePicker {
     }, 0);
   }
 
-  return { open, close };
+  return { open, close, isOpen: () => !panel.hidden };
 }

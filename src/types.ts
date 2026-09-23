@@ -41,6 +41,9 @@ export interface AppState {
   year: number;
   month: number;
   detailDate: Date | null;
+  // Minutes after local midnight the detail view shows, once the user has
+  // picked one; null leaves it to the view (see moon-detail.js).
+  detailTime: number | null;
   returnTo: ReturnTo | null;
 }
 
@@ -48,7 +51,9 @@ export interface AppState {
 // main.js — exactly one is ever mounted at a time.
 export interface ViewInstance {
   mount(container: HTMLElement, renderer: THREE.WebGLRenderer): void;
-  update(): void;
+  // True when this frame differs from the last one drawn — main.js skips the
+  // render otherwise, so a still calendar or moon costs no GPU time.
+  update(): boolean;
   render(renderer: THREE.WebGLRenderer): void;
   resize(width: number, height: number): void;
   dispose(): void;
@@ -60,7 +65,7 @@ export interface ViewInstance {
   getPan?(): GridPan | null;
   // Detail view only: show another date without being torn down, easing
   // across to it — how the nav arrows step a day (see moon-detail.js).
-  setDate?(date: Date): void;
+  setDate?(date: Date, time: number | null): void;
   // Detail view only: rename the back button, for when a day step has moved
   // where it goes (see stepNav in main.js).
   setBackLabel?(text: string): void;

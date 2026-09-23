@@ -8,6 +8,15 @@ const SPACING = 2.4;
 const CELL_RADIUS = 0.85;
 const LEFT_GUTTER = 3.2; // world units reserved for the row-label axis (month names or day numbers)
 const TOP_GUTTER = 1.4; // world units reserved for the column-header axis (day numbers or month names)
+// Transposed (portrait) grids run at the minimum cell size on a phone, where
+// full month names in a 2.4-unit column shrank to ~7px type. Abbreviated
+// names and a gutter sized for two-digit day numbers leave room to scale the
+// labels up to something readable.
+const TRANSPOSED_LEFT_GUTTER = 1.8;
+const TRANSPOSED_LABEL_SCALE = 1.4;
+// Month headers sit just above the first row rather than at the top of the
+// gutter, so they read as labels for their column instead of floating free.
+const TRANSPOSED_HEADER_Y = -TOP_GUTTER * 0.55;
 // Calendar mode has no row labels (weeks aren't named) — just a small
 // symmetric margin either side of the 7-day-wide grid.
 const CAL_LEFT_GUTTER = 0.4;
@@ -66,6 +75,8 @@ interface SpriteEntry {
 
 interface MonthLabelEntry extends SpriteEntry {
   row: number;
+  long: TextTexture;
+  short: TextTexture;
 }
 
 interface DayLabelEntry extends SpriteEntry {
@@ -129,12 +140,17 @@ function getRingMaterial(): THREE.SpriteMaterial {
   return sharedRingMaterial;
 }
 
+interface TextTexture {
+  texture: THREE.CanvasTexture;
+  baseScale: SpriteScale;
+}
+
 // Rasterizes text once at a fixed resolution, solid white — dimming and
 // hover-highlighting are done live via material.opacity/color (see
 // setLabelHighlighted) rather than by re-rendering the texture. The
 // sprite's on-screen size is likewise controlled entirely via .scale (set
 // later, per layout) rather than by the texture's pixel size.
-function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {}): THREE.Sprite {
+function createTextTexture(text: string, fontPx: number): TextTexture {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d")!;
   ctx.font = `${fontPx}px system-ui, sans-serif`;
@@ -149,6 +165,12 @@ function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  const worldHeight = 0.7;
+  return { texture, baseScale: { x: (width / height) * worldHeight, y: worldHeight } };
+}
+
+function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {}): THREE.Sprite {
+  const { texture, baseScale } = createTextTexture(text, fontPx);
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
@@ -157,8 +179,7 @@ function createTextSprite(text: string, { fontPx = 64 }: { fontPx?: number } = {
     color: LABEL_COLOR,
   });
   const sprite = new THREE.Sprite(material);
-  const worldHeight = 0.7;
-  sprite.userData.baseScale = { x: (width / height) * worldHeight, y: worldHeight } satisfies SpriteScale;
+  sprite.userData.baseScale = baseScale;
   return sprite;
 }
 
@@ -294,9 +315,15 @@ export function createMoonGridView({
   months.forEach((month0, row) => {
     if (!isCalendar) {
       const label = createTextSprite(MONTH_NAMES[month0]!, { fontPx: 56 });
+      const short = createTextTexture(MONTH_NAMES[month0]!.slice(0, 3), 56);
       scene.add(label);
-      monthLabels.push({ sprite: label, row });
-      disposables.push(label.material.map!, label.material);
+      monthLabels.push({
+        sprite: label,
+        row,
+        long: { texture: label.material.map as THREE.CanvasTexture, baseScale: label.userData.baseScale },
+        short,
+      });
+      disposables.push(label.material.map!, short.texture, label.material);
     }
 
     const n = daysInMonth(year, month0);
@@ -399,8 +426,12 @@ export function createMoonGridView({
   // so sighted keyboard users can see where they are too, not just via
   // screen-reader announcements.
   let activeCell: CellRef | null = null;
+  // Whether anything drawn has changed since update() last reported — the
+  // grid is otherwise a still image, so frames are only drawn on a change.
+  let dirty = true;
   function setActiveCell(cell: CellRef | null) {
     if (cellKey(cell) === cellKey(activeCell)) return;
+    dirty = true;
     if (activeCell) {
       setLabelHighlighted(monthLabelByRow.get(activeCell.row), false);
       setLabelHighlighted(dayLabelByDay.get(activeCell.day), false);
@@ -426,6 +457,8 @@ export function createMoonGridView({
 
   // Layout state, recomputed in resize() since orientation is only known then.
   let transposed = false;
+  let leftGutter = LEFT_GUTTER;
+  let labelScale = 1;
   let cellScale = 1;
   let contentWidth = 0;
   // Content hangs downward from y = contentTop, which is above y = 0 in
@@ -443,11 +476,11 @@ export function createMoonGridView({
   function posFor(primaryIndex: number, secondaryIndex: number): { x: number; y: number } {
     return transposed
       ? {
-          x: LEFT_GUTTER + secondaryIndex * SPACING + SPACING / 2,
+          x: leftGutter + secondaryIndex * SPACING + SPACING / 2,
           y: -TOP_GUTTER - primaryIndex * SPACING - SPACING / 2,
         }
       : {
-          x: LEFT_GUTTER + primaryIndex * SPACING + SPACING / 2,
+          x: leftGutter + primaryIndex * SPACING + SPACING / 2,
           y: -TOP_GUTTER - secondaryIndex * SPACING - SPACING / 2,
         };
   }
@@ -520,9 +553,11 @@ export function createMoonGridView({
   function applyLineLayout() {
     const primaryCount = cols;
     const secondaryCount = rows;
-    contentWidth = LEFT_GUTTER + (transposed ? secondaryCount : primaryCount) * SPACING;
+    leftGutter = transposed ? TRANSPOSED_LEFT_GUTTER : LEFT_GUTTER;
+    labelScale = transposed ? TRANSPOSED_LABEL_SCALE : 1;
+    contentWidth = leftGutter + (transposed ? secondaryCount : primaryCount) * SPACING;
     // Half a label's height clears the tops of the header labels.
-    contentTop = (transposed ? TOP_GUTTER * 0.3 : SPACING * 0.15) + 0.35 * cellScale;
+    contentTop = (transposed ? TRANSPOSED_HEADER_Y : SPACING * 0.15) + 0.35 * cellScale * labelScale;
     contentHeight = contentTop + TOP_GUTTER + (transposed ? primaryCount : secondaryCount) * SPACING;
     centerX = contentWidth / 2;
     centerY = contentTop - contentHeight / 2;
@@ -543,13 +578,17 @@ export function createMoonGridView({
 
     // Month labels sit in the secondary-axis gutter: a left-hand row label
     // normally, a top column header once transposed.
-    for (const { sprite, row } of monthLabels) {
+    for (const { sprite, row, long, short } of monthLabels) {
       const { x, y } = transposed
-        ? { x: LEFT_GUTTER + row * SPACING + SPACING / 2, y: TOP_GUTTER * 0.3 }
-        : { x: LEFT_GUTTER * 0.42, y: -TOP_GUTTER - row * SPACING - SPACING / 2 };
+        ? { x: leftGutter + row * SPACING + SPACING / 2, y: TRANSPOSED_HEADER_Y }
+        : { x: leftGutter * 0.42, y: -TOP_GUTTER - row * SPACING - SPACING / 2 };
       sprite.position.set(x, y, 0);
-      const base: SpriteScale = sprite.userData.baseScale;
-      sprite.userData.currentScale = { x: base.x * cellScale, y: base.y * cellScale } satisfies SpriteScale;
+      const text = transposed ? short : long;
+      sprite.material.map = text.texture;
+      sprite.userData.baseScale = text.baseScale;
+      const base = text.baseScale;
+      const s = cellScale * labelScale;
+      sprite.userData.currentScale = { x: base.x * s, y: base.y * s } satisfies SpriteScale;
       sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
     }
 
@@ -557,11 +596,12 @@ export function createMoonGridView({
     // a left-hand row label once transposed.
     for (const { sprite, day } of dayLabels) {
       const { x, y } = transposed
-        ? { x: LEFT_GUTTER * 0.42, y: -TOP_GUTTER - (day - 1) * SPACING - SPACING / 2 }
-        : { x: LEFT_GUTTER + (day - 1) * SPACING + SPACING / 2, y: SPACING * 0.15 };
+        ? { x: leftGutter * 0.5, y: -TOP_GUTTER - (day - 1) * SPACING - SPACING / 2 }
+        : { x: leftGutter + (day - 1) * SPACING + SPACING / 2, y: SPACING * 0.15 };
       sprite.position.set(x, y, 0);
       const base: SpriteScale = sprite.userData.baseScale;
-      sprite.userData.currentScale = { x: base.x * cellScale, y: base.y * cellScale } satisfies SpriteScale;
+      const s = cellScale * labelScale;
+      sprite.userData.currentScale = { x: base.x * s, y: base.y * s } satisfies SpriteScale;
       sprite.scale.set(sprite.userData.currentScale.x, sprite.userData.currentScale.y, 1);
     }
   }
@@ -606,6 +646,7 @@ export function createMoonGridView({
     camera.top = panY + frustumH / 2;
     camera.bottom = panY - frustumH / 2;
     camera.updateProjectionMatrix();
+    dirty = true;
   }
 
   // Pans just enough to bring a cell (plus a small margin) back within the
@@ -850,7 +891,9 @@ export function createMoonGridView({
     },
 
     update() {
-      // Grid cells are static thumbnails — nothing to animate per frame.
+      const changed = dirty;
+      dirty = false;
+      return changed;
     },
 
     render(renderer) {
@@ -944,6 +987,7 @@ export function createMoonGridView({
     // grid is already mounted — updates in place, no rebuild needed.
     setRingsVisible(visible: boolean) {
       for (const { sprite } of ringSprites) sprite.visible = visible;
+      dirty = true;
     },
 
     dispose() {
