@@ -16,6 +16,7 @@ export interface ChromeButtons {
   calendarModeButton: HTMLButtonElement;
   layoutChromeButtons: () => void;
   getTopInset: () => number;
+  getIconRow: () => DOMRect | null;
   getShowRings: () => boolean;
   getCalendarMode: () => boolean;
 }
@@ -48,12 +49,19 @@ export function createChromeButtons({
   chromeButtons.id = "chrome-buttons";
   document.body.appendChild(chromeButtons);
 
+  let droppedBelowNav = false;
   function layoutChromeButtons() {
     chromeButtons.style.top = "";
     const navRect = nav.getBoundingClientRect();
     const chromeRect = chromeButtons.getBoundingClientRect();
-    const overlaps = navRect.bottom > chromeRect.top && navRect.right + 8 > chromeRect.left;
-    if (overlaps) chromeButtons.style.top = `${navRect.bottom + 12}px`;
+    droppedBelowNav = navRect.bottom > chromeRect.top && navRect.right + 8 > chromeRect.left;
+    if (droppedBelowNav) chromeButtons.style.top = `${navRect.bottom + 12}px`;
+  }
+
+  // The icon cluster's box while it sits on a row of its own under the nav
+  // (a phone), whose left side is otherwise empty; null when it's beside it.
+  function getIconRow() {
+    return droppedBelowNav ? chromeButtons.getBoundingClientRect() : null;
   }
   window.addEventListener("resize", layoutChromeButtons);
 
@@ -232,6 +240,7 @@ export function createChromeButtons({
     calendarModeButton,
     layoutChromeButtons,
     getTopInset,
+    getIconRow,
     getShowRings: () => showRings,
     getCalendarMode: () => calendarMode,
   };

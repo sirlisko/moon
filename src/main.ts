@@ -382,6 +382,7 @@ function setView(kind: AppView) {
       onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
       announce,
       getTopInset: chrome.getTopInset,
+      getIconRow: chrome.getIconRow,
     });
   }
 

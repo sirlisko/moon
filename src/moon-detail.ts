@@ -85,6 +85,9 @@ function computeFov(aspect: number): number {
 // instead of a cut; the fades bring in everything the grid had no
 // counterpart for (stars, HUD, back button).
 const TRANSITION_MS = 520;
+// Least room left between the back button and the icon cluster when the two
+// share a row.
+const BACK_ICON_GAP_PX = 12;
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
@@ -236,6 +239,8 @@ export interface MoonDetailViewOptions {
   // enough to push the icon cluster below the nav (see chrome-buttons.js's
   // own layoutChromeButtons) made "Reset view" collide with it.
   getTopInset?: () => number;
+  // The icon cluster's own row, when it has one (see chrome-buttons.js).
+  getIconRow?: () => DOMRect | null;
 }
 
 // The single "moon as seen from here" 3D view. `live: true` (the "Today" nav
@@ -264,6 +269,7 @@ export function createMoonDetailView({
   onStopOrientation,
   announce,
   getTopInset,
+  getIconRow,
 }: MoonDetailViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   // Far plane clears the star sphere (radius 800) even at maximum zoom-out;
@@ -475,8 +481,18 @@ export function createMoonDetailView({
   function applyChromeInset() {
     if (!getTopInset) return;
     const top = `${getTopInset()}px`;
-    if (backButton) backButton.style.top = top;
     if (resetButton) resetButton.style.top = top;
+    if (!backButton) return;
+    backButton.style.top = top;
+    // On a phone the icons drop to a row of their own; back shares it, level
+    // with them, rather than stacking a third row — unless its label is long
+    // enough to run into them.
+    const row = getIconRow?.();
+    if (!row) return;
+    const back = backButton.getBoundingClientRect();
+    if (back.right + BACK_ICON_GAP_PX <= row.left) {
+      backButton.style.top = `${row.top + (row.height - back.height) / 2}px`;
+    }
   }
 
   // Nothing to recompute while the tab is hidden; the catch-up refresh on
