@@ -1,7 +1,15 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { computeMoonState, getPhaseName, azimuthToCompass } from "./astronomy.js";
-import type { MoonState } from "./astronomy.js";
+import {
+  computeMoonState,
+  computeMoonVisual,
+  getPhaseName,
+  azimuthToCompass,
+  localNoon,
+  moonTransit,
+  nextPrincipalPhase,
+} from "./astronomy.js";
+import type { MoonState, MoonVisual } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
 import { sunDirFromPhase, earthshineFromPhase, earthshineColor, SUN_INTENSITY } from "./moon-shader.js";
 import { setIconLabel } from "./icons.js";
@@ -175,9 +183,36 @@ const DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
   day: "numeric",
 });
 const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const PHASE_DAY_FORMAT = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short" });
+
+// The time slider's resolution, in minutes. Transit times are rounded to it
+// too, so the thumb and the time shown always agree.
+const TIME_STEP = 5;
+// Without a location there's no "highest point" to aim for, and the Moon
+// barely changes over a day anyway — an evening is when people look up.
+const FALLBACK_TIME = 21 * 60;
+
+function calendarDaysBetween(a: Date, b: Date): number {
+  const dayA = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const dayB = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((dayB - dayA) / 86_400_000);
+}
+
+function describeNextPhase(from: Date, live: boolean): string {
+  const next = nextPrincipalPhase(from);
+  const name = next.kind === "full" ? "Full moon" : "New moon";
+  const days = calendarDaysBetween(from, next.time);
+  if (days === 0) return `${name} at ${TIME_FORMAT.format(next.time)}`;
+  if (days === 1 && live) return `${name} tomorrow`;
+  return `${name} in ${days} day${days === 1 ? "" : "s"} · ${PHASE_DAY_FORMAT.format(next.time)}`;
+}
 
 export interface MoonDetailViewOptions {
   date: Date | null;
+  // Minutes after local midnight to show `date` at, as picked on the time
+  // slider; null picks for the user (see momentFor). Ignored when live.
+  time?: number | null;
+  onTimeChange?: (time: number) => void;
   location: LocationState;
   live: boolean;
   onBack: (() => void) | null;
@@ -205,7 +240,8 @@ export interface MoonDetailViewOptions {
 
 // The single "moon as seen from here" 3D view. `live: true` (the "Today" nav
 // entry) recomputes from the real clock every 30s; otherwise it's a static
-// snapshot at local noon on `date`, reached by clicking a calendar cell.
+// snapshot of `date` at a time of day the user can scrub, reached by
+// clicking a calendar cell.
 //
 // `location` is a shared mutable ref ({ coords, status }) owned by main.js —
 // status is "idle" | "pending" | "granted" | "denied" | "unsupported".
@@ -215,6 +251,8 @@ export interface MoonDetailViewOptions {
 // a later grant still takes effect via refreshLocation().
 export function createMoonDetailView({
   date,
+  time = null,
+  onTimeChange,
   location,
   live,
   onBack,
@@ -284,6 +322,12 @@ export function createMoonDetailView({
   let backButton: HTMLButtonElement | null = null;
   let resetButton: HTMLButtonElement | null = null;
   let locationButton: HTMLButtonElement | null = null;
+  let timeInput: HTMLInputElement | null = null;
+  let timeOutput: HTMLOutputElement | null = null;
+  let pickedTime = time;
+  // Whether anything drawn has changed since update() last reported, beyond
+  // what update() can see running itself (a flight, a step, the camera).
+  let dirty = true;
   let compass: SkyCompass | null = null;
   // Viewport size, needed to turn the incoming pixel circle into world
   // units; only known from resize(), which main.js calls right after mount.
@@ -298,6 +342,11 @@ export function createMoonDetailView({
   // know — so "back" goes back to being a plain cut.
   let cell: MoonOrigin | null =
     from && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? from : null;
+  // The day as its grid cell drew it — at noon, while this view may be showing
+  // it at night — so the flight can ease from one to the other.
+  let cellVisual: MoonVisual | null = cell && date
+    ? computeMoonVisual(localNoon(date.getFullYear(), date.getMonth(), date.getDate()))
+    : null;
   // The flight currently running, if any. "in" = arriving from the cell,
   // "out" = shrinking back onto it, after which onBack() hands over.
   // `primed` marks that the start pose has actually been presented once:
@@ -451,16 +500,38 @@ export function createMoonDetailView({
     }
   }
 
-  function refresh() {
-    const at = live ? new Date() : date!;
+  // The moment a non-live view shows: the picked time if there is one, else
+  // the Moon's highest point that day, else an evening.
+  function momentFor(day: Date): { at: Date; highest: boolean } {
+    const atMinutes = (minutes: number) =>
+      new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(minutes / 60), minutes % 60);
+    if (pickedTime !== null) return { at: atMinutes(pickedTime), highest: false };
+    const transit = location.coords ? moonTransit(day, location.coords) : null;
+    if (!transit) return { at: atMinutes(FALLBACK_TIME), highest: false };
+    const minutes = transit.getHours() * 60 + transit.getMinutes();
+    const rounded = Math.min(24 * 60 - TIME_STEP, Math.round(minutes / TIME_STEP) * TIME_STEP);
+    return { at: atMinutes(rounded), highest: true };
+  }
+
+  function refresh({ announceDate = true }: { announceDate?: boolean } = {}) {
+    const moment = live ? { at: new Date(), highest: false } : momentFor(date!);
+    const at = moment.at;
     moonState = computeMoonState(at, location.coords);
     const current = moonState;
+    dirty = true;
+
+    if (timeInput && timeOutput) {
+      timeInput.value = String(at.getHours() * 60 + at.getMinutes());
+      const text = TIME_FORMAT.format(at);
+      timeInput.setAttribute("aria-valuetext", moment.highest ? `${text}, Moon at its highest` : text);
+      timeOutput.textContent = moment.highest ? `${text} · highest` : text;
+    }
 
     const phaseLine = `${getPhaseName(current.phase)} · ${current.illuminatedPercent}% illuminated`;
-    const lines = [phaseLine];
+    const lines = [phaseLine, describeNextPhase(at, live)];
     if (current.horizon) {
       const alt = current.horizon.altitude;
-      const when = live ? "now" : "at noon";
+      const when = live ? "now" : `at ${TIME_FORMAT.format(at)}`;
       lines.push(
         alt > 0
           ? `${alt.toFixed(0)}° above ${azimuthToCompass(current.horizon.azimuth)} horizon ${when}`
@@ -469,8 +540,9 @@ export function createMoonDetailView({
       if (current.moonrise || current.moonset) {
         // ↑/↓ rather than "Moonrise"/"Moonset" — same info, far less width,
         // which matters a lot once this is stacked 3 lines deep on a phone.
-        const rise = current.moonrise ? `↑ ${TIME_FORMAT.format(current.moonrise)}` : "no rise today";
-        const set = current.moonset ? `↓ ${TIME_FORMAT.format(current.moonset)}` : "no set today";
+        const day = live ? "today" : "that day";
+        const rise = current.moonrise ? `↑ ${TIME_FORMAT.format(current.moonrise)}` : `no rise ${day}`;
+        const set = current.moonset ? `↓ ${TIME_FORMAT.format(current.moonset)}` : `no set ${day}`;
         lines.push(`${rise} · ${set}`);
       }
     } else if (location.status === "denied") {
@@ -483,7 +555,7 @@ export function createMoonDetailView({
 
     // Live re-refreshes every 30s — only announce on an actual date change
     // (static views) or a fresh location grant, not every routine tick.
-    if (!live) announce?.(`${DATE_FORMAT.format(date!)}. ${phaseLine}.`);
+    if (!live && announceDate) announce?.(`${DATE_FORMAT.format(date!)}. ${phaseLine}.`);
 
     if (locationButton) {
       // "denied" still offers a retry (requestLocation asks again, and the
@@ -539,6 +611,26 @@ export function createMoonDetailView({
       label.className = "moon-label";
       hud.appendChild(label);
 
+      if (!live) {
+        const timeControl = document.createElement("label");
+        timeControl.className = "time-control";
+        timeInput = document.createElement("input");
+        timeInput.type = "range";
+        timeInput.min = "0";
+        timeInput.max = String(24 * 60 - TIME_STEP);
+        timeInput.step = String(TIME_STEP);
+        timeInput.setAttribute("aria-label", "Time of day");
+        timeOutput = document.createElement("output");
+        timeControl.append(timeOutput, timeInput);
+        hud.appendChild(timeControl);
+        // The date hasn't changed, and the slider announces its own value.
+        timeInput.addEventListener("input", () => {
+          pickedTime = Number(timeInput!.value);
+          refresh({ announceDate: false });
+          onTimeChange?.(pickedTime);
+        });
+      }
+
       if (onBack) {
         backButton = document.createElement("button");
         backButton.className = "back-button";
@@ -558,6 +650,7 @@ export function createMoonDetailView({
       resetButton.addEventListener("click", () => {
         camera.position.copy(DEFAULT_CAMERA_POSITION);
         controls!.update();
+        dirty = true;
       });
       root.appendChild(resetButton);
       applyChromeInset();
@@ -568,6 +661,11 @@ export function createMoonDetailView({
       controls.dampingFactor = 0.25;
       controls.minDistance = MIN_ZOOM_DISTANCE;
       controls.maxDistance = MAX_ZOOM_DISTANCE;
+      // Not update()'s return value: pointer handlers apply a drag inside
+      // their own update() call, so the per-frame one can report no change.
+      controls.addEventListener("change", () => {
+        dirty = true;
+      });
 
       if (flight) {
         controls.enabled = false;
@@ -585,14 +683,25 @@ export function createMoonDetailView({
 
     update() {
       const current = moonState!;
+      // Read before advancing: the frame a flight or step ends still has to
+      // draw its final pose.
+      const animating = flight !== null || stepFrom !== null;
       const arrived = advanceFlight();
 
       // Mid-step, the sky shown is somewhere between the day we were on and
       // the day stepped to; with no step running these are just `current`.
       const step = stepFrom ? easeInOutCubic(Math.min(1, (performance.now() - stepStart) / STEP_MS)) : 1;
-      const phase = stepFrom ? blendCycle(stepFrom.phase, current.phase, step, 1) : current.phase;
-      const libLon = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLonRad, current.libLonRad, step) : current.libLonRad;
-      const libLat = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLatRad, current.libLatRad, step) : current.libLatRad;
+      let phase = stepFrom ? blendCycle(stepFrom.phase, current.phase, step, 1) : current.phase;
+      let libLon = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLonRad, current.libLonRad, step) : current.libLonRad;
+      let libLat = stepFrom ? THREE.MathUtils.lerp(stepFrom.libLatRad, current.libLatRad, step) : current.libLatRad;
+      // Mid-flight, the moon is somewhere between its grid cell (that day at
+      // noon) and this view's own moment, so it starts out lit and turned
+      // exactly as the cell that was clicked, whatever the time shown here.
+      if (cellVisual && arrived < 1) {
+        phase = blendCycle(cellVisual.phase, phase, arrived, 1);
+        libLon = THREE.MathUtils.lerp(cellVisual.libLonRad, libLon, arrived);
+        libLat = THREE.MathUtils.lerp(cellVisual.libLatRad, libLat, arrived);
+      }
       const tilt = stepFrom
         ? blendCycle(stepFrom.parallacticAngle, current.parallacticAngle, step, Math.PI * 2)
         : current.parallacticAngle;
@@ -612,13 +721,12 @@ export function createMoonDetailView({
       sunLight.position.copy(sunDirFromPhase(phase)).applyQuaternion(roll).multiplyScalar(100);
       earthLight.intensity = earthshineFromPhase(phase);
 
-      // Libration is applied outright: the grid's cells carry the same
-      // date's libration, so the arriving moon is already oriented like the
-      // one that was clicked (easing it in from zero, as this used to, made
-      // the moon visibly tip as it flew). The parallactic roll has no
-      // counterpart in the grid — it depends on the observer's horizon,
-      // which a calendar cell knows nothing about — so that one still eases
-      // in over the flight, and is simply 0 until location is granted.
+      // Libration starts from the cell's own (see cellVisual above) rather
+      // than from zero, which made the moon visibly tip as it flew. The
+      // parallactic roll has no counterpart in the grid — it depends on the
+      // observer's horizon, which a calendar cell knows nothing about — so
+      // that one eases in from zero over the flight, and is simply 0 until
+      // location is granted.
       moonEuler.set(BASE_ROTATION_X + libLat, BASE_ROTATION_Y + libLon, 0);
       moon.quaternion.setFromEuler(moonEuler).premultiply(roll);
       controls!.update();
@@ -636,6 +744,10 @@ export function createMoonDetailView({
           ? { azimuth: current.horizon.azimuth, altitude: current.horizon.altitude }
           : null
       );
+
+      const changed = animating || dirty;
+      dirty = false;
+      return changed;
     },
 
     render(renderer) {
@@ -661,12 +773,14 @@ export function createMoonDetailView({
     // mounted: recompute for the new date and ease across to it (see STEP_MS)
     // instead of tearing the view down and building another one, which cut
     // between two skies — and rebuilt the star field underneath.
-    setDate(next: Date) {
+    setDate(next: Date, nextTime: number | null) {
       // Any flight in progress was aimed at the day we're leaving: land it
       // (rather than abandoning the moon mid-slide) and give up the cell.
       if (flight) settleFlight(1);
       cell = null;
+      cellVisual = null;
       date = next;
+      pickedTime = nextTime;
       const previous = moonState;
       refresh();
       stepFrom = previous && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? previous : null;
@@ -681,7 +795,7 @@ export function createMoonDetailView({
 
     // Called by main.js when geolocation resolves after this view already
     // mounted — recomputes with the now-available coordinates.
-    refreshLocation: refresh,
+    refreshLocation: () => refresh(),
 
     // Called by main.js when the motion-permission prompt is answered.
     refreshOrientation: () => compass?.syncStatus(),

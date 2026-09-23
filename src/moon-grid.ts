@@ -399,8 +399,12 @@ export function createMoonGridView({
   // so sighted keyboard users can see where they are too, not just via
   // screen-reader announcements.
   let activeCell: CellRef | null = null;
+  // Whether anything drawn has changed since update() last reported — the
+  // grid is otherwise a still image, so frames are only drawn on a change.
+  let dirty = true;
   function setActiveCell(cell: CellRef | null) {
     if (cellKey(cell) === cellKey(activeCell)) return;
+    dirty = true;
     if (activeCell) {
       setLabelHighlighted(monthLabelByRow.get(activeCell.row), false);
       setLabelHighlighted(dayLabelByDay.get(activeCell.day), false);
@@ -606,6 +610,7 @@ export function createMoonGridView({
     camera.top = panY + frustumH / 2;
     camera.bottom = panY - frustumH / 2;
     camera.updateProjectionMatrix();
+    dirty = true;
   }
 
   // Pans just enough to bring a cell (plus a small margin) back within the
@@ -850,7 +855,9 @@ export function createMoonGridView({
     },
 
     update() {
-      // Grid cells are static thumbnails — nothing to animate per frame.
+      const changed = dirty;
+      dirty = false;
+      return changed;
     },
 
     render(renderer) {
@@ -944,6 +951,7 @@ export function createMoonGridView({
     // grid is already mounted — updates in place, no rebuild needed.
     setRingsVisible(visible: boolean) {
       for (const { sprite } of ringSprites) sprite.visible = visible;
+      dirty = true;
     },
 
     dispose() {

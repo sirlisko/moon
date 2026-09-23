@@ -8,6 +8,19 @@ function formatISODate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+function formatTime(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+// "HH:MM" → minutes after midnight, or null for anything else.
+function parseTime(value: string | null): number | null {
+  const match = value?.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  return h < 24 && m < 60 ? h * 60 + m : null;
+}
+
 // Keeps the URL a shareable/bookmarkable reflection of `state`. Uses
 // `window.location` explicitly — a bare `location` would resolve to
 // main.js's geolocation state object instead, wherever this is called from.
@@ -23,9 +36,11 @@ export function syncUrl(state: AppState): void {
   } else if (state.view === "detail" && state.detailDate) {
     params.set("view", "detail");
     params.set("date", formatISODate(state.detailDate));
+    if (state.detailTime !== null) params.set("time", formatTime(state.detailTime));
   }
   // "today" needs no params — it's the default landing state.
-  const qs = params.toString();
+  // ":" is legal in a query string; left encoded, a shared time reads "06%3A30".
+  const qs = params.toString().replace(/%3A/g, ":");
   const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
   window.history.replaceState(null, "", url);
 }
@@ -42,6 +57,7 @@ export function setViewFromUrl(state: AppState, setView: (view: AppView) => void
     const [y, m, d] = dateParam.split("-").map(Number);
     if (y && m && d && m >= 1 && m <= 12 && d >= 1) {
       state.detailDate = localNoon(y, m - 1, d);
+      state.detailTime = parseTime(params.get("time"));
       // No natural "came from" grid for a direct link — send it to that
       // date's month view. onBack only reads state.returnTo.view and
       // relies on state.year/month already being right (true for normal

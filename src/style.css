@@ -1,5 +1,5 @@
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: Avenir, Helvetica, Arial, sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
@@ -104,6 +104,33 @@ button {
   border: 0;
 }
 
+/* Set by main.js when WebGL can't start: the visually-hidden intro becomes
+   the whole page, with a note on why there's no Moon. */
+body.no-webgl #page-intro {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0 auto;
+  padding: 48px 24px;
+  max-width: 560px;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+body.no-webgl {
+  background: #0b0b10;
+  overflow: auto;
+}
+body.no-webgl #bg {
+  display: none;
+}
+body.no-webgl #page-intro h1 {
+  line-height: 1.2;
+}
+.webgl-note {
+  color: rgb(255, 176, 32);
+}
+
 .moon-hud {
   position: fixed;
   /* max() clears the iOS home indicator and falls back to the plain value
@@ -117,6 +144,74 @@ button {
   align-items: center;
   gap: 10px;
   pointer-events: none;
+}
+
+/* Only on non-live views: the time of day the Moon is shown at. */
+.time-control {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(320px, calc(100vw - 48px));
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.time-control output {
+  flex: none;
+  min-width: 9ch;
+  text-align: right;
+}
+/* Drawn by hand rather than with accent-color, whose filled track outshone
+   the Moon: a hairline and a small dot, brightening only while in use.
+   The input itself stays tall, so the hit area is a finger's, not the dot's. */
+.time-control input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.time-control input::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.time-control input::-moz-range-track {
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.time-control input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  transition: background 0.15s ease;
+}
+.time-control input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  transition: background 0.15s ease;
+}
+.time-control input:hover::-webkit-slider-thumb,
+.time-control input:active::-webkit-slider-thumb,
+.time-control input:focus-visible::-webkit-slider-thumb {
+  background: #fff;
+}
+.time-control input:hover::-moz-range-thumb,
+.time-control input:active::-moz-range-thumb,
+.time-control input:focus-visible::-moz-range-thumb {
+  background: #fff;
 }
 
 .moon-label {
