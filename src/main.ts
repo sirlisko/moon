@@ -10,7 +10,7 @@ import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
 import { createDatePicker } from "./date-picker.js";
-import { trackPageview } from "./analytics.js";
+import { track, trackPageview } from "./analytics.js";
 import type { AppState, AppView, GridPan, MoonOrigin, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
@@ -40,6 +40,7 @@ function showWebGLUnavailable() {
   const intro = document.querySelector<HTMLElement>("#page-intro")!;
   const note = document.createElement("p");
   note.className = "webgl-note";
+  track("no-webgl");
   note.textContent =
     "This app draws the Moon with WebGL, which your browser has turned off or doesn't support. Try another browser, or turn on hardware acceleration.";
   intro.appendChild(note);
@@ -93,6 +94,26 @@ function announce(text: string) {
 
 const { location, requestLocation, restoreLocation } = createLocationState();
 const { orientation, requestOrientation, stopOrientation } = createOrientationState();
+
+// Only the outcome is sent — never coordinates or headings.
+function onLocationChange(restored: boolean) {
+  if (location.status !== "pending") track("location", { status: location.status, restored });
+  activeView?.refreshLocation?.();
+}
+
+// Status survives the view being remounted, so only a change is news.
+let reportedOrientation: string | null = null;
+function onOrientationChange() {
+  if (orientation.status !== "pending" && orientation.status !== reportedOrientation) {
+    reportedOrientation = orientation.status;
+    track("compass", { status: orientation.status });
+  }
+  activeView?.refreshOrientation?.();
+}
+
+// Once per detail view: enough to tell whether the slider gets found, without
+// an event per tick.
+let timeSliderUsed = false;
 
 // The title index.html ships, captured before any view overwrites it. The
 // today view is what "/" serves, so that's the one a search engine indexes —
@@ -188,7 +209,10 @@ gridLabel.addEventListener("click", () => {
       year: current.getFullYear(),
       month: current.getMonth(),
       day: current.getDate(),
-      onSelect: ({ year, month, day }) => goToDetail(new Date(year, month, day!)),
+      onSelect: ({ year, month, day }) => {
+        track("open-day", { from: "picker" });
+        goToDetail(new Date(year, month, day!));
+      },
     });
   }
 });
@@ -212,10 +236,11 @@ navButtons.forEach((btn) => {
   });
 });
 
-gridPrev.addEventListener("click", () => stepNav(-1));
-gridNext.addEventListener("click", () => stepNav(1));
+gridPrev.addEventListener("click", () => stepNav(-1, "button"));
+gridNext.addEventListener("click", () => stepNav(1, "button"));
 
-function stepNav(delta: number) {
+function stepNav(delta: number, via: "button" | "key") {
+  track("step", { view: state.view, via });
   if (state.view === "month") {
     state.month += delta;
     if (state.month < 0) { state.month = 11; state.year -= 1; }
@@ -287,11 +312,17 @@ function goToDetail(date: Date, origin: MoonOrigin | null = null, time: number |
 const chrome = createChromeButtons({
   nav,
   announce,
-  onToggleRings: (visible) => activeView?.setRingsVisible?.(visible),
+  onToggleRings: (visible) => {
+    track("toggle", { name: "rings", on: visible });
+    activeView?.setRingsVisible?.(visible);
+  },
   // Calendar/line is a structural layout change (not a live toggle like
   // rings), and only ever visible while month view is active — safe to
   // just rebuild the current view.
-  onToggleCalendarMode: () => setView(state.view),
+  onToggleCalendarMode: (calendarMode) => {
+    track("toggle", { name: "calendar-mode", on: calendarMode });
+    setView(state.view);
+  },
 });
 
 document.body.appendChild(viewContainer);
@@ -306,6 +337,7 @@ function setView(kind: AppView) {
   needsRender = true;
   viewContainer.innerHTML = "";
   state.view = kind;
+  timeSliderUsed = false;
 
   navButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.view === kind));
   // A detail view matches none of Today/Month/Year — there the date is
@@ -328,9 +360,9 @@ function setView(kind: AppView) {
       location,
       live: true,
       onBack: null,
-      onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
+      onRequestLocation: () => requestLocation(() => onLocationChange(false)),
       orientation,
-      onRequestOrientation: () => requestOrientation(() => activeView?.refreshOrientation?.()),
+      onRequestOrientation: () => requestOrientation(onOrientationChange),
       onStopOrientation: stopOrientation,
       announce,
       getTopInset: chrome.getTopInset,
@@ -344,7 +376,10 @@ function setView(kind: AppView) {
     activeView = createMoonGridView({
       year: state.year,
       months,
-      onSelectDate: goToDetail,
+      onSelectDate: (date, origin) => {
+        track("open-day", { from: kind });
+        goToDetail(date, origin);
+      },
       announce,
       showRings: chrome.getShowRings(),
       getTopInset: chrome.getTopInset,
@@ -363,6 +398,10 @@ function setView(kind: AppView) {
       onTimeChange: (time) => {
         state.detailTime = time;
         syncUrl(state);
+        if (!timeSliderUsed) {
+          timeSliderUsed = true;
+          track("time-slider");
+        }
       },
       location,
       live: false,
@@ -380,7 +419,7 @@ function setView(kind: AppView) {
         setView(r.view);
       },
       backLabel: backLabel(),
-      onRequestLocation: () => requestLocation(() => activeView?.refreshLocation?.()),
+      onRequestLocation: () => requestLocation(() => onLocationChange(false)),
       announce,
       getTopInset: chrome.getTopInset,
       getIconRow: chrome.getIconRow,
@@ -412,7 +451,7 @@ setViewFromUrl(state, setView);
 animate();
 // Only asks the browser when it has already said yes on an earlier visit, so
 // a returning visitor isn't made to tap "Use my location" every time.
-restoreLocation(() => activeView?.refreshLocation?.());
+restoreLocation(() => onLocationChange(true));
 
 window.addEventListener("resize", () => {
   applyRendererSize();
@@ -429,5 +468,5 @@ window.addEventListener("keydown", (e) => {
   if (datePicker.isOpen()) return;
   if ((e.target as Element).closest("input, textarea, select, [role=dialog]")) return;
   e.preventDefault();
-  stepNav(e.key === "ArrowLeft" ? -1 : 1);
+  stepNav(e.key === "ArrowLeft" ? -1 : 1, "key");
 });

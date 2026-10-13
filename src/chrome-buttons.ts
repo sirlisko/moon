@@ -1,4 +1,5 @@
 import { icon } from "./icons.js";
+import { track } from "./analytics.js";
 import type { IconName } from "./icons.js";
 
 const RINGS_STORAGE_KEY = "moon:showRings"; // off by default — a cleaner-looking grid — remembered across visits
@@ -172,6 +173,7 @@ export function createChromeButtons({
 
   let shareResetTimer: ReturnType<typeof setTimeout> | null = null;
   shareButton.addEventListener("click", async () => {
+    track("share");
     const copied = await copyLink();
     if (copied) {
       setShareState("check", "Link copied");
@@ -201,6 +203,7 @@ export function createChromeButtons({
     if (!aboutOverlay.hidden) return;
     focusBeforeAbout = document.activeElement as HTMLElement | null;
     aboutOverlay.hidden = false;
+    track("about");
     aboutCard.focus();
   }
 
