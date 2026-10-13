@@ -10,6 +10,7 @@ import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
 import { createDatePicker } from "./date-picker.js";
+import { trackPageview } from "./analytics.js";
 import type { AppState, AppView, GridPan, MoonOrigin, ViewInstance } from "./types.js";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#bg")!;
@@ -394,6 +395,7 @@ function setView(kind: AppView) {
   chrome.layoutChromeButtons();
   activeView!.resize(window.innerWidth, window.innerHeight);
   syncUrl(state);
+  trackPageview();
 }
 
 function animate() {
