@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, devices } from "@playwright/test";
 
 test("the time slider changes the shown time and round-trips through the URL", async ({ page, context }) => {
   await page.goto("/?view=detail&date=2026-09-20");
@@ -41,5 +41,21 @@ test("a location granted on an earlier visit is used without asking again", asyn
   await page.goto("/");
   await expect(page.locator(".moon-label")).toContainText(/horizon/);
   await expect(page.locator(".location-button:not(.sky-compass-button)")).toBeHidden();
+  await context.close();
+});
+
+test("a denied location points the user at their settings", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".location-button:not(.sky-compass-button)").click();
+  await expect(page.locator(".moon-label")).toContainText("check browser and device settings");
+  await expect(page.locator(".location-button:not(.sky-compass-button)")).toHaveText(/Try again/);
+});
+
+test("on iOS a denied location points at iOS Settings", async ({ browser }) => {
+  const context = await browser.newContext({ ...devices["iPhone 15"] });
+  const page = await context.newPage();
+  await page.goto("/");
+  await page.locator(".location-button:not(.sky-compass-button)").click();
+  await expect(page.locator(".moon-label")).toContainText("iOS Settings → Privacy → Location Services");
   await context.close();
 });

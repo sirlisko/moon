@@ -13,6 +13,7 @@ import type { MoonState, MoonVisual } from "./astronomy.js";
 import { getColorMap, getDisplacementMap } from "./textures.js";
 import { sunDirFromPhase, earthshineFromPhase, earthshineColor, SUN_INTENSITY } from "./moon-shader.js";
 import { setIconLabel } from "./icons.js";
+import { locationBlockedMessage } from "./location.js";
 import { createSkyCompass } from "./sky-compass.js";
 import type { SkyCompass } from "./sky-compass.js";
 import type { OrientationState } from "./orientation.js";
@@ -249,7 +250,7 @@ export interface MoonDetailViewOptions {
 // clicking a calendar cell.
 //
 // `location` is a shared mutable ref ({ coords, status }) owned by main.js —
-// status is "idle" | "pending" | "granted" | "denied" | "unsupported".
+// status is "idle" | "pending" | "granted" | "denied" | "unavailable" | "unsupported".
 // Geolocation is never requested automatically; `onRequestLocation` (from
 // main.js) is only called when the user clicks the "Use my location" button,
 // and views read location.coords/status fresh on every refresh() call, so
@@ -563,7 +564,8 @@ export function createMoonDetailView({
           : `below horizon ${when}`
       );
     } else {
-      if (location.status === "denied") lines.push("Location blocked in your browser");
+      if (location.status === "denied") lines.push(locationBlockedMessage());
+      else if (location.status === "unavailable") lines.push("Couldn't find your location");
       else if (location.status === "unsupported") lines.push("Location not supported on this browser");
       if (!live) lines.push(`At ${timeText}`);
     }
@@ -575,11 +577,9 @@ export function createMoonDetailView({
     if (!live && announceDate) announce?.(`${DATE_FORMAT.format(date!)}. ${phaseLine}.`);
 
     if (locationButton) {
-      // "denied" still offers a retry (requestLocation asks again, and the
-      // browser may answer from its own remembered choice); "unsupported"
-      // is the one state with nothing left to try.
-      const canAsk =
-        location.status === "idle" || location.status === "pending" || location.status === "denied";
+      // "denied" still offers a retry for after the user changes their
+      // settings; "unsupported" is the one state with nothing left to try.
+      const canAsk = location.status !== "granted" && location.status !== "unsupported";
       const needsButton = !current.horizon && canAsk;
       locationButton.hidden = !needsButton;
       if (needsButton) {
@@ -587,7 +587,7 @@ export function createMoonDetailView({
         if (location.status === "pending") {
           setIconLabel(locationButton, null, "Locating…");
         } else {
-          setIconLabel(locationButton, "pin", location.status === "denied" ? "Try again" : "Use my location");
+          setIconLabel(locationButton, "pin", location.status === "idle" ? "Use my location" : "Try again");
         }
       }
     }

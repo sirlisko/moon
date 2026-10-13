@@ -1,7 +1,7 @@
 import type * as THREE from "three";
 import type { ObserverCoords } from "./astronomy.js";
 
-export type LocationStatus = "idle" | "pending" | "granted" | "denied" | "unsupported";
+export type LocationStatus = "idle" | "pending" | "granted" | "denied" | "unavailable" | "unsupported";
 
 // Shared, mutable ref owned by main.js — views read coords/status fresh on
 // every refresh rather than being pushed an update (see location.js).
