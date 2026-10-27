@@ -10,11 +10,13 @@ export interface ChromeButtonsOptions {
   announce?: (text: string) => void;
   onToggleRings?: (visible: boolean) => void;
   onToggleCalendarMode?: (calendarMode: boolean) => void;
+  onPrintInterest?: () => void;
 }
 
 export interface ChromeButtons {
   ringsButton: HTMLButtonElement;
   calendarModeButton: HTMLButtonElement;
+  printButton: HTMLButtonElement;
   layoutChromeButtons: () => void;
   getTopInset: () => number;
   getIconRow: () => DOMRect | null;
@@ -42,6 +44,7 @@ export function createChromeButtons({
   announce,
   onToggleRings,
   onToggleCalendarMode,
+  onPrintInterest,
 }: ChromeButtonsOptions): ChromeButtons {
   let showRings = readSetting(RINGS_STORAGE_KEY) === "1";
   let calendarMode = readSetting(CALENDAR_STORAGE_KEY) !== "0";
@@ -132,6 +135,19 @@ export function createChromeButtons({
     onToggleCalendarMode?.(calendarMode);
     announce?.(calendarMode ? "Calendar view." : "Line view.");
   });
+
+  // A fake door: there are no prints yet. Clicks are counted to decide
+  // whether building the poster export and checkout is worth it.
+  const PRINT_LABEL = "Get this as a print";
+  const printButton = document.createElement("button");
+  printButton.id = "print-button";
+  printButton.className = "icon-button";
+  printButton.innerHTML = icon("printer");
+  printButton.title = PRINT_LABEL;
+  printButton.setAttribute("aria-label", PRINT_LABEL);
+  chromeButtons.appendChild(printButton);
+
+  printButton.addEventListener("click", () => onPrintInterest?.());
 
   const shareButton = document.createElement("button");
   shareButton.id = "share-button";
@@ -241,6 +257,7 @@ export function createChromeButtons({
   return {
     ringsButton,
     calendarModeButton,
+    printButton,
     layoutChromeButtons,
     getTopInset,
     getIconRow,

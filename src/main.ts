@@ -9,6 +9,7 @@ import { createLocationState } from "./location.js";
 import { createOrientationState } from "./orientation.js";
 import { syncUrl, setViewFromUrl } from "./url-state.js";
 import { createChromeButtons } from "./chrome-buttons.js";
+import { createPrintSignup } from "./print-signup.js";
 import { createDatePicker } from "./date-picker.js";
 import { track, trackPageview } from "./analytics.js";
 import type { AppState, AppView, GridPan, MoonOrigin, ViewInstance } from "./types.js";
@@ -309,6 +310,8 @@ function goToDetail(date: Date, origin: MoonOrigin | null = null, time: number |
   setView("detail");
 }
 
+const printSignup = createPrintSignup();
+
 const chrome = createChromeButtons({
   nav,
   announce,
@@ -322,6 +325,10 @@ const chrome = createChromeButtons({
   onToggleCalendarMode: (calendarMode) => {
     track("toggle", { name: "calendar-mode", on: calendarMode });
     setView(state.view);
+  },
+  onPrintInterest: () => {
+    track("print-interest", { view: state.view, year: state.year });
+    printSignup.open({ view: state.view, year: state.year });
   },
 });
 
@@ -349,6 +356,7 @@ function setView(kind: AppView) {
   // Calendar/line only means anything for a single month — year view
   // always uses the strip layout regardless of the stored preference.
   chrome.calendarModeButton.hidden = kind !== "month";
+  chrome.printButton.hidden = kind !== "month" && kind !== "year";
 
   if (kind === "today") {
     gridNav.hidden = false;

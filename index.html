@@ -104,6 +104,7 @@
         <li>Each day in the calendar uses the same math, checked at noon that day. Click a day to see it up close.</li>
         <li>On a phone, "Point me at the Moon" uses the built-in compass to show which way to turn and how far to look up. Phone compasses read magnetic north and are only accurate to about ten degrees, so treat it as a nudge in the right direction rather than a precise sight.</li>
         <li>Your location stays in your browser. It is never sent anywhere.</li>
+        <li>If you ask to hear about prints, your email is stored with Netlify Forms and used only to tell you when they are available.</li>
       </ul>
       <h3>Credits</h3>
       <ul>
@@ -113,6 +114,28 @@
       </ul>
     </div>
   </div>
+
+  <!-- A fake door: prints don't exist yet. Signups measure whether they're
+       worth building. The form is static markup so Netlify's build-time form
+       detection can find it. -->
+  <dialog id="print-dialog" aria-labelledby="print-title">
+    <button id="print-close" aria-label="Close"></button>
+    <h2 id="print-title">Moon calendar prints</h2>
+    <p>Printed posters of the moon calendar aren't available yet. Leave your email and you'll get one message when they are.</p>
+    <form id="print-form" name="print-interest" method="POST" data-netlify="true" netlify-honeypot="company">
+      <input type="hidden" name="form-name" value="print-interest" />
+      <input type="hidden" name="view" />
+      <input type="hidden" name="year" />
+      <p hidden><label>Leave this empty <input name="company" tabindex="-1" autocomplete="off" /></label></p>
+      <label for="print-email">Email</label>
+      <div class="print-row">
+        <input id="print-email" type="email" name="email" required autocomplete="email" />
+        <button type="submit">Notify me</button>
+      </div>
+      <p class="print-note">Only used for this. No marketing or spam.</p>
+    </form>
+    <p id="print-status" role="status"></p>
+  </dialog>
 
   <script type="module" src="/src/main.ts"></script>
 </body>
