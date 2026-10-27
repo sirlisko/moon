@@ -252,6 +252,11 @@ export interface MoonGridViewOptions {
   // view returns to the part of the calendar the user was actually looking
   // at. Ignored when the grid fits on screen without panning.
   initialPan?: GridPan | null;
+  // Lays the grid out for a poster rather than a screen: always the whole
+  // grid with no panning, no today highlight, and no label sprites, since
+  // canvas-texture text blurs at print resolution and gets drawn in 2D over
+  // the render instead.
+  print?: boolean;
 }
 
 // months: array of 0-based month indices — [m] for a single month, [0..11]
@@ -268,6 +273,7 @@ export function createMoonGridView({
   getTopInset = () => 0,
   calendarMode = false,
   initialPan = null,
+  print = false,
 }: MoonGridViewOptions): ViewInstance {
   const scene = new THREE.Scene();
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
@@ -349,7 +355,7 @@ export function createMoonGridView({
       mesh.userData.illuminatedPercent = visual.illuminatedPercent;
       mesh.userData.isNewMoon = isNewMoon;
       mesh.userData.isFullMoon = isFullMoon;
-      mesh.userData.isToday = isTodayYMD(date);
+      mesh.userData.isToday = !print && isTodayYMD(date);
       scene.add(mesh);
       cells.push({ mesh, day, row });
       disposables.push(material);
@@ -407,6 +413,9 @@ export function createMoonGridView({
   // number already sitting in the corner. In line mode that number is a
   // column header shared by every month, so the month name is tinted too and
   // today is where the two meet.
+  if (print) {
+    for (const { sprite } of [...monthLabels, ...dayLabels, ...weekdayLabels]) sprite.visible = false;
+  }
   if (todayDay !== null) {
     markToday(dayLabelByDay.get(todayDay));
     if (!isCalendar && todayRow !== null) markToday(monthLabelByRow.get(todayRow));
@@ -920,7 +929,7 @@ export function createMoonGridView({
       let { width: fitW, height: fitH } = fitFrustum(contentWidth, contentHeight, width / height);
       const fitCellPx = (cellDiameterWorld / fitW) * width;
 
-      if (fitCellPx >= MIN_CELL_PX) {
+      if (print || fitCellPx >= MIN_CELL_PX) {
         panEnabled = false;
         frustumW = fitW;
         frustumH = fitH;
@@ -955,7 +964,7 @@ export function createMoonGridView({
         // so it can never push the bottom rows out of a view with no pan.
         const topAlignedPanY = contentTop + topInsetWorld - frustumH / 2;
         const centredPanY = centerY + Math.max(0, topInsetWorld - existingTopMargin);
-        panY = topAligned ? Math.min(centredPanY, topAlignedPanY) : centredPanY;
+        panY = topAligned && !print ? Math.min(centredPanY, topAlignedPanY) : centredPanY;
       } else {
         panEnabled = true;
         const targetPxPerWorldUnit = MIN_CELL_PX / cellDiameterWorld;
