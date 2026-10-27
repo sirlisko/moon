@@ -208,6 +208,7 @@ export function createChromeButtons({
   const aboutCard = aboutOverlay.querySelector<HTMLElement>("#about-card")!;
   const aboutCloseButton = aboutOverlay.querySelector<HTMLElement>("#about-close")!;
   aboutCloseButton.innerHTML = icon("close");
+  aboutCard.querySelector("#tip-link")!.addEventListener("click", () => track("tip-click"));
 
   let focusBeforeAbout: HTMLElement | null = null;
 
